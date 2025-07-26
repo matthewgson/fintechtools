@@ -11,7 +11,6 @@ This project provides a Docker container based on Ubuntu 24.04 (latest) that inc
 **Key Features:**
 
 - **Base OS:** Ubuntu 24.04 LTS
-- **User:** gson (USF CIRCE credentials)
 - **SSH Port:** 2222
 - **Build Tool:** Podman (macOS)
 - **HPC Platform:** AMD64/Linux
@@ -41,7 +40,37 @@ This project provides a Docker container based on Ubuntu 24.04 (latest) that inc
    podman machine init
    podman machine start
    ```
-2. **Set up Podman VM with Toolbox:**
+
+2. **Optional: Configure Pushover Notifications:**
+
+   For build status notifications on your mobile device:
+
+   ```bash
+   # Create Pushover configuration file
+   cat > ~/.pushover_config << 'EOF'
+   # Pushover API Configuration
+   # Get your API token from https://pushover.net/apps/build
+   # Get your user key from https://pushover.net/
+
+   # Your application's API token
+   PUSHOVER_TOKEN="your_api_token_here"
+
+   # Your user key (identifies your account)
+   PUSHOVER_USER="your_user_key_here"
+
+   # Optional: device name to send to specific device
+   # PUSHOVER_DEVICE=""
+
+   # Optional: sound to use for notifications
+   # PUSHOVER_SOUND="pushover"
+   EOF
+   ```
+
+   **How to get Pushover credentials:**
+   - Visit [https://pushover.net/apps/build](https://pushover.net/apps/build) to create an application and get your API token
+   - Your user key is available on your [Pushover dashboard](https://pushover.net/)
+   - Install the Pushover app on your mobile device and log in with your account
+3. **Set up Podman VM with Toolbox:**
 
    ```bash
    # Enter Podman VM
@@ -61,7 +90,7 @@ This project provides a Docker container based on Ubuntu 24.04 (latest) that inc
    exit
    exit
    ```
-3. **Verify Installation:**
+4. **Verify Installation:**
 
    ```bash
    # Check Podman
@@ -92,6 +121,7 @@ The script will automatically:
 2. Save it as a tar file
 3. Convert to Singularity format (with automatic or manual options)
 4. Optionally transfer to CIRCE HPC
+5. Send push notifications for build status updates (if configured)
 
 #### Build Script Options:
 
@@ -99,6 +129,20 @@ The script will automatically:
 - **Manual conversion**: Provides step-by-step instructions following README exactly
 - **Version control**: Use `-v` flag to specify custom version (e.g., `./build_container.sh -v 0.3`)
 - **Help**: Use `--help` flag to see all options
+- **Notifications**: Automatically detects Pushover configuration for mobile alerts
+
+#### Notification Features:
+
+If you've configured Pushover (see Prerequisites section), the build script provides:
+
+- 🚀 **Build Start**: Notification when container build begins
+- ✅ **Docker Build Complete**: Success notification when image is built
+- ❌ **Build Failed**: Error alerts if any step fails
+- 🔐 **Credential Required**: Alert when script needs your CIRCE password for transfer
+- ✅ **Transfer Complete**: Confirmation when file successfully transfers to HPC
+- 🎉 **Build Complete**: Final notification with total build time
+
+This enables remote monitoring of long builds and alerts you exactly when credential input is needed.
 
 The script detects your environment and guides you through the appropriate workflow.
 
@@ -227,7 +271,7 @@ EOF
 
 ### Connecting to the Container
 
-Use SSH with proxy jump to connect through the login node:
+Use SSH with proxy jump to connect through the login node: (replace `gson` with your username and `<compute-hostname>` with the actual hostname of the compute node you want to access):
 
 ```bash
 ssh -J gson@circe.rc.usf.edu gson@<compute-hostname> -p 2222 -i ~/.ssh/local_mac_to_singularity
@@ -259,62 +303,21 @@ ssh -J gson@circe.rc.usf.edu gson@<compute-hostname> -p 2222 -i ~/.ssh/local_mac
 - System monitoring (htop)
 - Network utilities (wget, curl)
 
-## Usage Workflow
+## Build Container 
 
-### Option 1: Automated Build (Recommended)
+### Automated Build (Recommended)
 
 ```bash
 chmod +x build_container.sh
 ./build_container.sh
 ```
 
-### Option 2: Manual Build Process
-
-1. **Job Allocation:** Submit SLURM job and obtain job ID and compute node assignment
-2. **SSH Configuration:** Configure SSH with proper identity files and proxy jump
-3. **Container Launch:** Start Singularity instance with GPU support and SSH daemon
-4. **Development:** Connect with VSCode or other SSH clients for remote development
-
-### Build Script Features
-
-- **Environment Detection**: Automatically detects if running in Podman VM
-- **Conversion Options**: Choose between automatic or manual step-by-step conversion
-- **Progress Tracking**: Colored output with clear status indicators
-- **Error Handling**: Comprehensive error checking and recovery suggestions
-- **File Management**: Automatic cleanup and file path management
-
 ## Files in This Repository
 
 - `Dockerfile` - Container definition and software installation
-- `build_container.sh` - Automated build script for complete workflow
+- `build_container.sh` - Automated build script with notification support
 - `positron_1Ncontainer.sh` - SLURM job script for launching the container
 - `README.md` - This documentation
 - `ssh_config` - SSH client configuration template
 - `sshd_config` - SSH daemon configuration template
-
-## Support and Troubleshooting
-
-### Build Script Issues
-
-- **Permission denied**: Run `chmod +x build_container.sh` to make executable
-- **Podman not found**: Install Podman: `brew install podman && podman machine init && podman machine start`
-- **Podman machine not running**: Start with `podman machine start`
-- **Conversion fails**: Choose manual option (2) for step-by-step guidance
-- **File not found**: Ensure script is run from directory containing Dockerfile
-- **Toolbox issues**: Verify toolbox is available in Podman VM: `podman machine ssh -- "toolbox --version"`
-- **Apptainer not found**: Install in toolbox: `podman machine ssh -- "toolbox run sudo dnf install -y apptainer"`
-
-### Container and System Issues
-
-- **Container building:** Check Podman logs and Dockerfile syntax
-- **SSH connection:** Verify key permissions and sshd_config settings
-- **HPC deployment:** Consult CIRCE documentation and job logs
-- **Software dependencies:** Review installation logs in the container build process
-
-### Environment Requirements
-
-- **Host System**: macOS with Podman virtualization
-- **Podman VM**: Fedora-based VM with toolbox support
-- **Conversion Tools**: Apptainer/Singularity in toolbox environment
-- **Target Platform**: AMD64 Linux (HPC systems)
-- **Network Access**: SSH connectivity to CIRCE HPC
+- `~/.pushover_config` - Pushover notification configuration (user-created)

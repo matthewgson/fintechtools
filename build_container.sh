@@ -7,7 +7,7 @@ set -e  # Exit on any error
 
 # Configuration
 IMAGE_NAME="fintech-tools"
-VERSION="0.2"
+VERSION="0.21"
 TAR_FILE="$HOME/fintech-tools.tar"
 SIF_FILE="fintech-tools.sif"
 REMOTE_USER="gson"
@@ -77,6 +77,60 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Pushover notification functions
+load_pushover_config() {
+    PUSHOVER_CONFIG="$HOME/.pushover_config"
+    if [ -f "$PUSHOVER_CONFIG" ]; then
+        source "$PUSHOVER_CONFIG"
+        if [ -n "$PUSHOVER_TOKEN" ] && [ -n "$PUSHOVER_USER" ]; then
+            NOTIFICATIONS_ENABLED=true
+            print_status "✓ Pushover notifications enabled"
+        else
+            print_warning "Pushover config found but incomplete. Notifications disabled."
+            NOTIFICATIONS_ENABLED=false
+        fi
+    else
+        print_warning "Pushover config not found at $PUSHOVER_CONFIG. Notifications disabled."
+        NOTIFICATIONS_ENABLED=false
+    fi
+}
+
+send_pushover_notification() {
+    local title="$1"
+    local message="$2"
+    local priority="${3:-0}"  # Default priority is normal (0)
+    
+    if [ "$NOTIFICATIONS_ENABLED" != "true" ]; then
+        return 0
+    fi
+    
+    if ! command_exists curl; then
+        print_warning "curl not found. Cannot send notification."
+        return 1
+    fi
+    
+    print_status "📱 Sending notification: $title"
+    
+    # Use URL-encoded data as per Pushover API documentation
+    local response=$(curl -s \
+        -H "Content-Type: application/x-www-form-urlencoded" \
+        -d "token=${PUSHOVER_TOKEN}" \
+        -d "user=${PUSHOVER_USER}" \
+        -d "title=${title}" \
+        -d "message=${message}" \
+        -d "priority=${priority}" \
+        https://api.pushover.net/1/messages.json)
+    
+    # Check if response contains "status":1 (success)
+    if echo "$response" | grep -q '"status":1'; then
+        print_status "✓ Notification sent successfully"
+        return 0
+    else
+        print_warning "Failed to send notification: $response"
+        return 1
+    fi
+}
+
 # Check if we're in Podman VM environment
 check_podman_vm() {
     if [ -d "/run/host/Users" ]; then
@@ -91,11 +145,17 @@ main() {
     # Start total timer
     TOTAL_START_TIME=$(date +%s)
     
+    # Load Pushover configuration
+    load_pushover_config
+    
     echo "========================================="
     echo "FinTech Tools Container Build Script"
     echo "Following README.md workflow"
     echo "Started at: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "========================================="
+    
+    # Send start notification
+    send_pushover_notification "🚀 Container Build Started" "FinTech Tools container build process has begun on $(hostname)"
     
     # Check prerequisites
     print_status "Checking prerequisites..."
@@ -148,8 +208,10 @@ main() {
     
     if [ $? -eq 0 ]; then
         end_timer "Docker image build"
+        send_pushover_notification "✅ Docker Build Complete" "FinTech Tools Docker image built successfully (${IMAGE_NAME}:${VERSION})"
     else
         print_error "Failed to build Docker image"
+        send_pushover_notification "❌ Build Failed" "Docker image build failed. Check logs for details."
         exit 1
     fi
     
@@ -199,6 +261,9 @@ main() {
     print_status "Finished at: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "========================================="
     echo
+    
+    # Send completion notification
+    send_pushover_notification "🎉 Build Complete" "FinTech Tools container build completed successfully in $(format_total_time $TOTAL_ELAPSED)"
 }
 
 # Convert to Singularity in Podman VM environment (README Step 2)
@@ -378,6 +443,7 @@ offer_transfer_to_hpc() {
         
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             print_status "Transferring to ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}..."
+            send_pushover_notification "🔐 Credential Required" "Ready to transfer ${SIF_FILE} to CIRCE HPC. Please enter your password when prompted."
             echo "Command: scp ${SIF_FILE} ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
             
             # Time the transfer
@@ -388,8 +454,10 @@ offer_transfer_to_hpc() {
             
             if [ $? -eq 0 ]; then
                 print_success "File transferred successfully to CIRCE in ${transfer_time}s!"
+                send_pushover_notification "✅ Transfer Complete" "File transferred successfully to CIRCE HPC in ${transfer_time}s!"
             else
                 print_error "Failed to transfer file to CIRCE"
+                send_pushover_notification "❌ Transfer Failed" "Failed to transfer file to CIRCE HPC. Manual transfer required."
                 print_status "You can transfer manually using:"
                 echo "scp ${SIF_FILE} ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
             fi

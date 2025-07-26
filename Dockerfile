@@ -29,6 +29,8 @@ RUN apt-get update && \
     python3 \
     python3-pip \
     python3-dev \
+    python3-venv \
+    python3-setuptools \
     openjdk-11-jdk \
     libboost-all-dev \
     libquantlib0-dev \
