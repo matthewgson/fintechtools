@@ -5,7 +5,7 @@ FROM ubuntu:latest
 # Labels for metadata
 LABEL maintainer="Matthew Son"
 LABEL description="Containerized Environment for Financial / Quantitiative Computing for HPC"
-LABEL version="0.2"
+LABEL version="0.22"
 
 # Set environment variables to avoid interactive prompts when installing packages (e.g. tzdata)
 ENV DEBIAN_FRONTEND=noninteractive
@@ -51,6 +51,17 @@ RUN apt-get update && \
     libprotobuf-dev \
     protobuf-compiler \
     libhdf5-dev \
+    libfontconfig1-dev \
+    libfreetype6-dev \
+    libpng-dev \
+    libtiff5-dev \
+    libtiff-dev \
+    libjpeg-dev \
+    libcairo2-dev \
+    libxt-dev \
+    libfribidi-dev \
+    libharfbuzz-dev \
+    pandoc \
     nvidia-cuda-toolkit \
     git \
     nano \

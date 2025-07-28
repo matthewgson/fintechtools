@@ -438,12 +438,13 @@ offer_transfer_to_hpc() {
     if [ -f "${SIF_FILE}" ]; then
         echo
         print_status "Deploy to HPC System"
+        send_pushover_notification "🔐 Transfer Ready" "Container build complete! Ready to transfer ${SIF_FILE} to CIRCE HPC. Please check your terminal to confirm transfer."
         read -p "Do you want to transfer ${SIF_FILE} to CIRCE HPC? (y/N): " -n 1 -r
         echo
         
         if [[ $REPLY =~ ^[Yy]$ ]]; then
             print_status "Transferring to ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}..."
-            send_pushover_notification "🔐 Credential Required" "Ready to transfer ${SIF_FILE} to CIRCE HPC. Please enter your password when prompted."
+            send_pushover_notification "🔐 Credential Required" "Starting transfer to CIRCE HPC. Please enter your password when prompted."
             echo "Command: scp ${SIF_FILE} ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
             
             # Time the transfer
