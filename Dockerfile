@@ -106,8 +106,7 @@ RUN groupadd -g 10001 usfuser && \
     groupadd -g 663800067 circe_access && \
     groupadd -g 663800106 sism_group && \
     useradd -m -s /bin/bash -u 70230911 -g 10001 -G 663800067,663800106 gson && \
-    echo "gson:fintech" | chpasswd && \
-    echo "gson ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers # Add gson to sudoer container
+    echo "gson ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers # Add gson to sudoers with no password required
 
 # Set default command / User
 

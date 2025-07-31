@@ -1,6 +1,6 @@
 # FinTech Tools Container for Docker / Apptainer (Singularity)
 
-A containerized environment for financial and quantitative computing, designed for High Performance Computing (HPC) systems and remote development with VSCode IDE.
+A containerized environment for financial and quantitative computing, designed for High Performance Computing (HPC) systems and remote development with VSCode / Positron IDE.
 
 **Built and tested on macOS** with Podman virtualization for HPC deployment.
 
@@ -276,6 +276,49 @@ Use SSH with proxy jump to connect through the login node: (replace `gson` with 
 ```bash
 ssh -J gson@circe.rc.usf.edu gson@<compute-hostname> -p 2222 -i ~/.ssh/local_mac_to_singularity
 ```
+
+#### Connecting with Positron IDE
+
+Unlike VSCode, Positron's remote SSH doesn't handle proxy jump connections directly, so you need to set up port forwarding first:
+
+**Option 1: Manual SSH Port Forwarding**
+
+```bash
+# Set up port forwarding (replace compute_node with actual hostname)
+ssh -L 2223:compute_node:2222 gson@circe.rc.usf.edu
+
+# Keep this terminal open and use Positron to connect to:
+# Host: localhost
+# Port: 2223
+# Username: gson
+```
+
+**Option 2: Automated Port Forwarding with autossh**
+
+```bash
+# Install autossh if not already available
+brew install autossh
+
+# Set up persistent port forwarding (replace compute_node with actual hostname)
+autossh -M 0 -f -N -L 2223:compute_node:2222 id@login_node
+
+# This runs in background. Use Positron to connect to:
+# Host: localhost
+# Port: 2223
+# Username: gson
+```
+
+**Positron Remote SSH Configuration:**
+
+1. Open Positron IDE
+2. Go to Remote SSH extension
+3. Add new SSH target with:
+   - **Host**: `localhost`
+   - **Port**: `2223`
+   - **Username**: `gson`
+   - **Identity File**: `~/.ssh/local_mac_to_singularity`
+
+The port forwarding creates a local tunnel from your machine's port 2223 to the container's SSH port 2222 on the compute node, allowing Positron to connect as if the container were running locally.
 
 ## Included Software and Tools
 
