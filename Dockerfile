@@ -21,6 +21,8 @@ WORKDIR /work_bgfs/g/gson
 # Update package lists and install system dependencies
 RUN apt-get update && \
     apt-get install -y \
+    slurm-client \
+    munge \
     locales \
     software-properties-common \
     gnupg \

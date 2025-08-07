@@ -69,9 +69,13 @@ singularity instance start \
     --nv \
     --no-home \
     --bind /work_bgfs/g/$USER:/work_bgfs/g/$USER \
-    --bind /home/g/$USER:/home/$USER \
+    # Home contains .ssh directory for SSH keys
+    # In the sshd_config file it seraches: AuthorizedKeysFile ~/.ssh/authorized_keys
+    --bind /home/g/$USER:/home/$USER \ 
     --bind /shares:/shares \
     --bind /home/g/gson/ssh_keys:/etc/ssh \
+    # Bind the Slurm configuration directory
+    --bind /etc/slurm:/etc/slurm \
     /home/g/$USER/containers/fintech-tools.sif \
     fintech_ssh_container
 
