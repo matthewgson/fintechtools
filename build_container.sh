@@ -7,7 +7,7 @@ set -e  # Exit on any error
 
 # Configuration
 IMAGE_NAME="fintech-tools"
-VERSION="0.21"
+VERSION="0.3"
 TAR_FILE="$HOME/fintech-tools.tar"
 SIF_FILE="fintech-tools.sif"
 REMOTE_USER="gson"
@@ -333,7 +333,7 @@ print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Set up environment variables
 IMAGE_NAME="fintech-tools"
-VERSION="0.2"
+VERSION="0.3"
 SIF_FILE="fintech-tools.sif"
 
 print_status "Setting up build directory in toolbox..."

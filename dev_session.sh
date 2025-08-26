@@ -1,25 +1,23 @@
 #!/bin/bash
-#
-# Positron Development Session with Fintech Tools Container
-# This script starts a Singularity container with SSH access for remote development
-#
-# SLURM Job Configuration
-#SBATCH --job-name=positron_dev_session
-#SBATCH --output=/home/g/gson/sh_log/positron_dev_session.log
-#SBATCH --error=/home/g/gson/sh_log/positron_dev_session_error.log
+#SBATCH --job-name=dev_session
+#SBATCH --output=/home/g/gson/sh_log/dev_session.log
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=60
+#SBATCH --cpus-per-task=128
 #SBATCH --partition=muma_2021
 #SBATCH --qos=muma21
-#SBATCH --mem=100gb
+#SBATCH --mem=1007gb
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=gson@usf.edu
-#SBATCH --time=48:00:00
+#SBATCH --time=168:00:00
+#SBATCH --nodelist=mdc-1057-13-9
 
 # Load required modules
 echo "Loading Singularity module..."
 module load apps/singularity/3.5.3
+
+# Capture start time in human-readable format
+START_TIME=$(date '+%Y-%m-%d %H:%M:%S %Z')
 
 # Set up cleanup function for graceful shutdown
 export GID=$$
@@ -51,6 +49,7 @@ echo "========================================="
 echo "VSCode Development Session Started"
 echo "========================================="
 echo "Job ID: $SLURM_JOB_ID"
+echo "Start Time: $START_TIME"
 echo "Compute Node: $COMPUTE_NODE"
 echo "Session Info: $SESSION_INFO"
 echo "SSH Command: ssh -J $USER@$LOGIN_NODE $USER@$COMPUTE_NODE"
@@ -64,17 +63,17 @@ if singularity instance list | grep -q fintech_ssh_container; then
 fi
 
 # Start Singularity container instance with GPU and SSH support
+# Home contains .ssh directory for SSH keys
+# In the sshd_config file it seraches: AuthorizedKeysFile ~/.ssh/authorized_keys
+# Bind the Slurm configuration directory
 echo "Starting Singularity container with GPU and SSH support..."
 singularity instance start \
     --nv \
     --no-home \
     --bind /work_bgfs/g/$USER:/work_bgfs/g/$USER \
-    # Home contains .ssh directory for SSH keys
-    # In the sshd_config file it seraches: AuthorizedKeysFile ~/.ssh/authorized_keys
-    --bind /home/g/$USER:/home/$USER \ 
+    --bind /home/g/$USER:/home/$USER \
     --bind /shares:/shares \
     --bind /home/g/gson/ssh_keys:/etc/ssh \
-    # Bind the Slurm configuration directory
     --bind /etc/slurm:/etc/slurm \
     /home/g/$USER/containers/fintech-tools.sif \
     fintech_ssh_container
@@ -93,3 +92,4 @@ echo "Use the SSH command above to connect with Positron or other SSH clients."
 
 # Keep the job running to maintain the container session
 wait
+

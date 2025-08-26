@@ -5,7 +5,7 @@ FROM ubuntu:latest
 # Labels for metadata
 LABEL maintainer="Matthew Son"
 LABEL description="Containerized Environment for Financial / Quantitiative Computing for HPC"
-LABEL version="0.22"
+LABEL version="0.3"
 
 # Set environment variables to avoid interactive prompts when installing packages (e.g. tzdata)
 ENV DEBIAN_FRONTEND=noninteractive
@@ -13,7 +13,11 @@ ENV TZ=America/New_York
 
 # Set locale
 ENV LC_ALL=C.UTF-8
-ENV LANG=C.UTF-
+ENV LANG=C.UTF-8
+
+# SLURM environment variables for container compatibility
+ENV SLURM_CONF=/etc/slurm/slurm.conf
+ENV MUNGE_SOCKET=/var/run/munge/munge.socket.2
 
 # Set working directory
 WORKDIR /work_bgfs/g/gson
@@ -22,7 +26,9 @@ WORKDIR /work_bgfs/g/gson
 RUN apt-get update && \
     apt-get install -y \
     slurm-client \
+    slurm-wlm \
     munge \
+    libmunge2 \
     locales \
     software-properties-common \
     gnupg \
@@ -99,6 +105,17 @@ RUN wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc |
 # Install R packages
 RUN R -e "install.packages('RQuantLib', repos = 'https://cloud.r-project.org/', type = 'source', configure.args = c('--with-boost-include=/usr/include/boost/'), configure.vars = c('CPPFLAGS=\"-DQL_HIGH_RESOLUTION_DATE\"', 'LDFLAGS=-L/usr/lib'))"
 RUN R -e "install.packages('h2o', repos = 'https://cloud.r-project.org/')"
+
+
+# Create SLURM configuration directories and set permissions
+# These will be mounted from the host system when running on HPC
+RUN mkdir -p /etc/slurm \
+             /var/lib/slurm \
+             /var/run/munge \
+             /var/log/slurm \
+             /tmp/slurm && \
+    chmod 755 /etc/slurm /var/lib/slurm /var/log/slurm /tmp/slurm && \
+    chmod 711 /var/run/munge
 
 
 # Create user matching your credentials: For file permissions

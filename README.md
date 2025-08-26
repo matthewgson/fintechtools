@@ -4,21 +4,77 @@ A containerized environment for financial and quantitative computing, designed f
 
 **Built and tested on macOS** with Podman virtualization for HPC deployment.
 
+## 🚀 Quick Start
+
+Get up and running in 3 simple steps:
+
+### 1. Install Prerequisites
+```bash
+# Install Podman on macOS
+brew install podman
+podman machine init && podman machine start
+
+# Set up Podman VM with Apptainer support
+podman machine ssh -- "sudo dnf install -y toolbox && toolbox create"
+```
+
+### 2. Configure User Settings
+Before building, customize these settings in `build_container.sh`:
+
+```bash
+# Open the build script and update these variables:
+nano build_container.sh
+
+# Required changes:
+REMOTE_USER="gson"          # ← Change to YOUR username
+REMOTE_HOST="circe.rc.usf.edu"  # ← Change to YOUR HPC system
+REMOTE_PATH="~/containers/"     # ← Adjust path as needed
+
+# Also update paths in the conversion script:
+# Line ~200: "/run/host/Users/matthewson"  ← Change to YOUR macOS username
+# Line ~350: "/run/host/Users/$(whoami)"   ← Should auto-detect, but verify
+```
+
+**Important customizations needed:**
+- **`REMOTE_USER`**: Replace `"gson"` with your HPC username
+- **`REMOTE_HOST`**: Replace with your HPC system (if not CIRCE)
+- **`/run/host/Users/matthewson`**: Replace `matthewson` with your macOS username
+- **SSH key paths**: Update paths in SSH setup if using different key names
+
+### 3. Build Container
+```bash
+# Clone this repository and build
+git clone <your-repo-url>
+cd <repo-directory>
+chmod +x build_container.sh
+./build_container.sh
+```
+
+### 4. Deploy and Connect
+```bash
+# SSH keys will be set up automatically by the build script
+# Connect to your container via SSH jump (use YOUR usernames):
+ssh -J your_username@your_hpc_system your_username@compute_node -p 2222
+```
+
+**That's it!** The automated build script handles container building, Singularity conversion, HPC transfer, and SSH configuration.
+
+---
+
 ## Overview
 
-This project provides a Docker container based on Ubuntu 24.04 (latest) that includes comprehensive tools for financial computing and data analysis. The container is configured to run as an SSH server on port 2222, enabling remote development access on USF CIRCE HPC systems.
+This project provides a Docker container based on Ubuntu 24.04 that includes comprehensive tools for financial computing and data analysis. The container is configured to run as an SSH server on port 2222, enabling remote development access on USF CIRCE HPC systems.
 
 **Key Features:**
 
-- **Base OS:** Ubuntu 24.04 LTS
-- **SSH Port:** 2222
-- **Build Tool:** Podman (macOS)
-- **HPC Platform:** AMD64/Linux
-- **Development Environment:** macOS host with Podman VM
+- **Base OS:** Ubuntu 24.04 LTS with financial computing tools
+- **SSH Port:** 2222 for remote development access
+- **Build Tool:** Podman (macOS) with automated Singularity conversion
+- **HPC Platform:** AMD64/Linux compatible
+- **IDE Support:** VSCode and Positron remote development
+- **Notifications:** Optional Pushover mobile alerts for build status
 
-## Quick Start
-
-### Prerequisites
+## 📋 Detailed Prerequisites
 
 **System Requirements:**
 
@@ -28,82 +84,83 @@ This project provides a Docker container based on Ubuntu 24.04 (latest) that inc
 - **Apptainer/Singularity** for HPC-compatible container format
 - **SSH access** to USF CIRCE HPC system
 
-**Installation Steps:**
+### Install Podman on macOS
 
-1. **Install Podman on macOS:**
+```bash
+# Using Homebrew (recommended)
+brew install podman
 
-   ```bash
-   # Using Homebrew (recommended)
-   brew install podman
+# Initialize and start Podman machine
+podman machine init
+podman machine start
+```
 
-   # Initialize and start Podman machine
-   podman machine init
-   podman machine start
-   ```
+### Set up Podman VM with Toolbox
 
-2. **Optional: Configure Pushover Notifications:**
+```bash
+# Enter Podman VM
+podman machine ssh
 
-   For build status notifications on your mobile device:
+# Install toolbox (if not already available)
+sudo dnf install -y toolbox
 
-   ```bash
-   # Create Pushover configuration file
-   cat > ~/.pushover_config << 'EOF'
-   # Pushover API Configuration
-   # Get your API token from https://pushover.net/apps/build
-   # Get your user key from https://pushover.net/
+# Create and enter toolbox environment
+toolbox create
+toolbox enter
 
-   # Your application's API token
-   PUSHOVER_TOKEN="your_api_token_here"
+# Install Apptainer in toolbox
+sudo dnf install -y apptainer
 
-   # Your user key (identifies your account)
-   PUSHOVER_USER="your_user_key_here"
+# Exit back to host
+exit
+exit
+```
 
-   # Optional: device name to send to specific device
-   # PUSHOVER_DEVICE=""
+### Verify Installation
 
-   # Optional: sound to use for notifications
-   # PUSHOVER_SOUND="pushover"
-   EOF
-   ```
+```bash
+# Check Podman
+podman --version
 
-   **How to get Pushover credentials:**
-   - Visit [https://pushover.net/apps/build](https://pushover.net/apps/build) to create an application and get your API token
-   - Your user key is available on your [Pushover dashboard](https://pushover.net/)
-   - Install the Pushover app on your mobile device and log in with your account
-3. **Set up Podman VM with Toolbox:**
+# Check Podman machine status
+podman machine list
 
-   ```bash
-   # Enter Podman VM
-   podman machine ssh
+# Verify toolbox and Apptainer access
+podman machine ssh -- "toolbox run apptainer --version"
+```
 
-   # Install toolbox (if not already available)
-   sudo dnf install -y toolbox
+### Optional: Configure Pushover Notifications
 
-   # Create and enter toolbox environment
-   toolbox create
-   toolbox enter
+For build status notifications on your mobile device:
 
-   # Install Apptainer in toolbox
-   sudo dnf install -y apptainer
+```bash
+# Create Pushover configuration file
+cat > ~/.pushover_config << 'EOF'
+# Pushover API Configuration
+# Get your API token from https://pushover.net/apps/build
+# Get your user key from https://pushover.net/
 
-   # Exit back to host
-   exit
-   exit
-   ```
-4. **Verify Installation:**
+# Your application's API token
+PUSHOVER_TOKEN="your_api_token_here"
 
-   ```bash
-   # Check Podman
-   podman --version
+# Your user key (identifies your account)
+PUSHOVER_USER="your_user_key_here"
 
-   # Check Podman machine status
-   podman machine list
+# Optional: device name to send to specific device
+# PUSHOVER_DEVICE=""
 
-   # Verify toolbox and Apptainer access
-   podman machine ssh -- "toolbox run apptainer --version"
-   ```
+# Optional: sound to use for notifications
+# PUSHOVER_SOUND="pushover"
+EOF
+```
 
-## Building the Container
+**How to get Pushover credentials:**
+
+- Visit [https://pushover.net/apps/build](https://pushover.net/apps/build) to create an application and get your API token
+- Your user key is available on your [Pushover dashboard](https://pushover.net/)
+- Install the Pushover app on your mobile device and log in with your account
+
+## 🔧 Building the Container
 
 ### Automated Build (Recommended)
 
@@ -146,7 +203,7 @@ This enables remote monitoring of long builds and alerts you exactly when creden
 
 The script detects your environment and guides you through the appropriate workflow.
 
-### Manual Build Process
+### Manual Build Process (Advanced Users)
 
 #### Step 1: Build Docker Image with Podman
 
@@ -154,10 +211,10 @@ From the directory containing the Dockerfile:
 
 ```bash
 # Build the container image
-podman build --platform linux/amd64 -t fintech-tools:0.2 .
+podman build --platform linux/amd64 -t fintech-tools:0.3 .
 
 # Save the image as a tar file for transfer
-podman save -o ~/fintech-tools.tar localhost/fintech-tools:0.2
+podman save -o ~/fintech-tools.tar localhost/fintech-tools:0.3
 ```
 
 #### Step 2: Convert to Singularity Format for HPC
@@ -196,22 +253,56 @@ Check if the SSH port is available:
 lsof -i :2222
 ```
 
-## SSH Configuration Setup
+## 🔑 SSH Configuration and Remote Access
+
+### Quick SSH Setup
+
+The build script automatically handles SSH configuration, but here are the details for manual setup or troubleshooting.
+
+**⚠️ User Configuration Required:**
+Before using SSH connections, make sure you've updated usernames in examples below:
+- Replace `your_username` with your actual HPC username
+- Replace `your_hpc_system` with your HPC hostname (e.g., `circe.rc.usf.edu`)
+- Replace `compute_node` with the actual compute node hostname
+
+### SSH Connection Methods
+
+#### VSCode Remote Development
+```bash
+# Direct connection via SSH jump (update usernames!)
+ssh -J your_username@your_hpc_system your_username@compute_node -p 2222 -i ~/.ssh/local_mac_to_singularity
+```
+
+#### Positron IDE Remote Development
+Positron requires port forwarding since it doesn't support proxy jumps directly:
+
+```bash
+# Option 1: Manual port forwarding (update usernames!)
+ssh -L 2223:compute_node:2222 your_username@your_hpc_system
+
+# Option 2: Persistent forwarding with autossh (update usernames!)
+brew install autossh
+autossh -M 0 -f -N -L 2223:compute_node:2222 your_username@your_hpc_system
+
+# Then connect Positron to: localhost:2223
+```
+
+### Detailed SSH Configuration Setup
 
 Since the container runs in rootless mode, SSH keys must be properly configured for client authentication.
 
-### Local Machine Setup (macOS)
+#### Local Machine Setup (macOS)
 
 Generate SSH key pair for container access:
 
 ```bash
 # Generate ED25519 key pair
-ssh-keygen -t ed25519 -f ~/.ssh/local_mac_to_singularity -C "matthewson@mac"
+ssh-keygen -t ed25519 -f ~/.ssh/local_mac_to_singularity -C "your_username@mac"
 ```
 
-### CIRCE Server Setup
+#### CIRCE Server Setup
 
-#### 1. Configure Authorized Keys
+**1. Configure Authorized Keys**
 
 ```bash
 # Add your public key to authorized_keys
@@ -222,7 +313,7 @@ nano ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
 ```
 
-#### 2. Generate Host Keys
+**2. Generate Host Keys**
 
 ```bash
 # Create SSH keys directory
@@ -235,7 +326,7 @@ chmod 700 ~/ssh_keys
 [ ! -f ~/ssh_keys/ssh_host_ed25519_key ] && ssh-keygen -t ed25519 -f ~/ssh_keys/ssh_host_ed25519_key -N "" -q
 ```
 
-#### 3. Create SSH Daemon Configuration
+**3. Create SSH Daemon Configuration**
 
 Create `sshd_config` in `~/ssh_keys` directory (this will be mounted as `/etc/ssh` in the container):
 
@@ -269,44 +360,7 @@ Subsystem sftp /usr/lib/openssh/sftp-server
 EOF
 ```
 
-### Connecting to the Container
-
-Use SSH with proxy jump to connect through the login node: (replace `gson` with your username and `<compute-hostname>` with the actual hostname of the compute node you want to access):
-
-```bash
-ssh -J gson@circe.rc.usf.edu gson@<compute-hostname> -p 2222 -i ~/.ssh/local_mac_to_singularity
-```
-
-#### Connecting with Positron IDE
-
-Unlike VSCode, Positron's remote SSH doesn't handle proxy jump connections directly, so you need to set up port forwarding first:
-
-**Option 1: Manual SSH Port Forwarding**
-
-```bash
-# Set up port forwarding (replace compute_node with actual hostname)
-ssh -L 2223:compute_node:2222 gson@circe.rc.usf.edu
-
-# Keep this terminal open and use Positron to connect to:
-# Host: localhost
-# Port: 2223
-# Username: gson
-```
-
-**Option 2: Automated Port Forwarding with autossh**
-
-```bash
-# Install autossh if not already available
-brew install autossh
-
-# Set up persistent port forwarding (replace compute_node with actual hostname)
-autossh -M 0 -f -N -L 2223:compute_node:2222 id@login_node
-
-# This runs in background. Use Positron to connect to:
-# Host: localhost
-# Port: 2223
-# Username: gson
-```
+#### Positron IDE Configuration Details
 
 **Positron Remote SSH Configuration:**
 
@@ -315,12 +369,12 @@ autossh -M 0 -f -N -L 2223:compute_node:2222 id@login_node
 3. Add new SSH target with:
    - **Host**: `localhost`
    - **Port**: `2223`
-   - **Username**: `gson`
+   - **Username**: `your_username`
    - **Identity File**: `~/.ssh/local_mac_to_singularity`
 
 The port forwarding creates a local tunnel from your machine's port 2223 to the container's SSH port 2222 on the compute node, allowing Positron to connect as if the container were running locally.
 
-## Included Software and Tools
+## 📚 Included Software and Tools
 
 ### Computing Frameworks
 
@@ -346,21 +400,36 @@ The port forwarding creates a local tunnel from your machine's port 2223 to the 
 - System monitoring (htop)
 - Network utilities (wget, curl)
 
-## Build Container 
+### HPC Integration
 
-### Automated Build (Recommended)
+- **SLURM Client Tools:** Full support for `sbatch`, `sacct`, `squeue`, `scancel`, and other SLURM commands
+- **Munge Authentication:** Integrated with HPC authentication system
+- **Job Submission:** Can submit and monitor SLURM jobs from within the container
+- **Resource Management:** Access to cluster resource information and job statistics
+
+**Note:** When running on HPC systems, the container automatically inherits SLURM configuration and authentication from the host system through bind mounts.
+
+## 📁 Repository Files
+
+- `Dockerfile` - Container definition and software installation
+- `build_container.sh` - Automated build script with notification support
+- `dev_session.sh` - Development session script for container management
+- `README.md` - This documentation
+- `ssh_config` - SSH client configuration template
+- `sshd_config` - SSH daemon configuration template
+- `.gitignore` - Git ignore rules for the repository
+- `.vscode/` - VS Code workspace settings and configurations
+
+**User-Created Files:**
+- `~/.pushover_config` - Pushover notification configuration (optional, user-created)
+
+---
+
+## Legacy Manual Build Reference
+
+### Build Container (Manual Method)
 
 ```bash
 chmod +x build_container.sh
 ./build_container.sh
 ```
-
-## Files in This Repository
-
-- `Dockerfile` - Container definition and software installation
-- `build_container.sh` - Automated build script with notification support
-- `positron_1Ncontainer.sh` - SLURM job script for launching the container
-- `README.md` - This documentation
-- `ssh_config` - SSH client configuration template
-- `sshd_config` - SSH daemon configuration template
-- `~/.pushover_config` - Pushover notification configuration (user-created)

@@ -1,32 +1,44 @@
 Host circe_login
   HostName circe.rc.usf.edu
   User gson
+  Port 22
   ForwardAgent yes
-
+  ControlMaster auto
+  ControlPath ~/.ssh/sockets/%r@%h-%p
+  ControlPersist 60000
+  
 Host compute_login
   HostName mdc-1057-13-8
   User gson
   ProxyJump circe_login
   ForwardAgent yes
-
-Host compute_positron
-  HostName mdc-1057-13-10  # UPDATE THIS with your compute node
+  ControlMaster auto
+  ControlPath ~/.ssh/sockets/%r@%h-%p
+  ControlPersist 60000
+  
+Host vscode-container
+  HostName mdc-1057-13-11
   User gson
   ProxyJump circe_login
-  ForwardAgent yes
-  LocalForward 2222 localhost:2222
-
-Host singularity-positron
-  HostName localhost
   Port 2222
-  User gson
-  ProxyJump compute_positron
   IdentityFile ~/.ssh/local_mac_to_singularity
   StrictHostKeyChecking no
   UserKnownHostsFile /dev/null
-  ForwardAgent yes 
+  ForwardAgent yes
+
+Host posit
+  HostName localhost
+  User gson
+  Port 2223
+  IdentityFile ~/.ssh/local_mac_to_singularity
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ForwardAgent yes
 
 Host hpg
   HostName hpg.rc.ufl.edu
   User gunsu.son
   ForwardAgent yes
+
+
+
