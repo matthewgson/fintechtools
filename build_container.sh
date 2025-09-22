@@ -7,7 +7,7 @@ set -e  # Exit on any error
 
 # Configuration
 IMAGE_NAME="fintech-tools"
-VERSION="0.3"
+VERSION="0.4"  # Updated with modern SLURM from Ubuntu repos and configuration fixes
 TAR_FILE="$HOME/fintech-tools.tar"
 SIF_FILE="fintech-tools.sif"
 REMOTE_USER="gson"
@@ -140,6 +140,43 @@ check_podman_vm() {
     fi
 }
 
+# Function to check and clean up containers using the image
+cleanup_containers_using_image() {
+    local image_name="$1"
+    local containers_using_image
+    
+    # Find containers using this image (both running and stopped)
+    containers_using_image=$(podman ps -a --filter "ancestor=localhost/${image_name}" --format "{{.ID}} {{.Names}} {{.Status}}" 2>/dev/null)
+    
+    if [ -n "$containers_using_image" ]; then
+        print_warning "Found containers using image ${image_name}:"
+        echo "$containers_using_image"
+        echo
+        
+        read -p "Do you want to remove these containers? (Y/n): " -n 1 -r
+        echo
+        
+        if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+            # Get container IDs
+            local container_ids=$(echo "$containers_using_image" | awk '{print $1}')
+            
+            print_status "Removing containers..."
+            for container_id in $container_ids; do
+                print_status "Removing container: $container_id"
+                if podman rm -f "$container_id" 2>/dev/null; then
+                    print_success "✓ Container $container_id removed"
+                else
+                    print_warning "Failed to remove container $container_id"
+                fi
+            done
+        else
+            print_error "Cannot proceed with image removal while containers are using it."
+            print_status "Please remove containers manually and try again."
+            exit 1
+        fi
+    fi
+}
+
 # Main function
 main() {
     # Start total timer
@@ -193,12 +230,46 @@ main() {
     end_timer "Prerequisites check"
     
     # Step 1: Clean existing image and build Docker Image with Podman
-    print_status "Step 1: Cleaning existing image and building Docker image with Podman..."
+    print_status "Step 1: Checking for existing images and building Docker image with Podman..."
     
-    # Check if image exists and remove it
+    # Check if image exists and handle it properly
     if podman image exists "localhost/${IMAGE_NAME}:${VERSION}" 2>/dev/null; then
-        print_status "Removing existing image: ${IMAGE_NAME}:${VERSION}"
-        podman image rmi -f "localhost/${IMAGE_NAME}:${VERSION}" || true
+        print_warning "Existing image found: ${IMAGE_NAME}:${VERSION}"
+        
+        # Show image details
+        print_status "Current image details:"
+        podman images "localhost/${IMAGE_NAME}:${VERSION}" --format "table {{.Repository}}:{{.Tag}}  {{.Created}}  {{.Size}}"
+        
+        echo
+        read -p "Do you want to remove the existing image and build a fresh one? (Y/n): " -n 1 -r
+        echo
+        
+        if [[ $REPLY =~ ^[Nn]$ ]]; then
+            print_status "Keeping existing image. Exiting build process."
+            print_status "If you want to use the existing image, you can:"
+            echo "  1. Run conversion manually: podman save -o ${TAR_FILE} localhost/${IMAGE_NAME}:${VERSION}"
+            echo "  2. Or change the version with: ./build_container.sh -v new_version"
+            exit 0
+        else
+            print_status "Removing existing image: ${IMAGE_NAME}:${VERSION}"
+            
+            # First, check and clean up any containers using this image
+            cleanup_containers_using_image "${IMAGE_NAME}:${VERSION}"
+            
+            # Now remove the image
+            if podman image rm -f "localhost/${IMAGE_NAME}:${VERSION}"; then
+                print_success "✓ Existing image removed successfully"
+            else
+                print_error "Failed to remove existing image."
+                print_status "This might be due to:"
+                echo "  1. Containers still using the image (check: podman ps -a)"
+                echo "  2. Image being used by other processes"
+                echo "  3. Permission issues"
+                exit 1
+            fi
+        fi
+    else
+        print_status "No existing image found. Proceeding with fresh build."
     fi
     
     echo "Command: podman build --platform linux/amd64 -t ${IMAGE_NAME}:${VERSION} ."
