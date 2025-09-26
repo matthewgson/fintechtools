@@ -1,6 +1,6 @@
 # FinTech Tools Container for Docker / Apptainer (Singularity)
 
-A containerized environment for financial and quantitative computing, designed for High Performance Computing (HPC) systems and remote development with VSCode / Positron IDE.
+A containerized environment for financial computing with GPU support, designed for local development and HPC deployment.
 
 **Built and tested on macOS** with Podman virtualization for HPC deployment.
 
@@ -184,7 +184,7 @@ The script will automatically:
 
 - **Automatic conversion**: Uses `podman machine ssh -- "toolbox run"` for seamless conversion
 - **Manual conversion**: Provides step-by-step instructions following README exactly
-- **Version control**: Use `-v` flag to specify custom version (e.g., `./build_container.sh -v 0.3`)
+- **Version control**: Use `-v` flag to specify custom version (e.g., `./build_container.sh -v 0.42`)
 - **Help**: Use `--help` flag to see all options
 - **Notifications**: Automatically detects Pushover configuration for mobile alerts
 
@@ -402,12 +402,13 @@ The port forwarding creates a local tunnel from your machine's port 2223 to the 
 
 ### HPC Integration
 
-- **SLURM Client Tools:** Full support for `sbatch`, `sacct`, `squeue`, `scancel`, and other SLURM commands
-- **Munge Authentication:** Integrated with HPC authentication system
-- **Job Submission:** Can submit and monitor SLURM jobs from within the container
-- **Resource Management:** Access to cluster resource information and job statistics
+- **Container Runtime:** Optimized for Apptainer/Singularity on HPC systems
+- **GPU Support:** CUDA-enabled with `--nv` flag for GPU acceleration
+- **File System Access:** Seamless access to HPC storage and file systems
+- **Simple Deployment:** Minimal dependencies, clean container design
+- **Job Management:** Use host system's SLURM commands for job submission and monitoring
 
-**Note:** When running on HPC systems, the container automatically inherits SLURM configuration and authentication from the host system through bind mounts.
+**Note:** This container focuses on providing a clean financial computing environment. Use host system tools for HPC-specific operations to avoid conflicts.
 
 ## 📁 Repository Files
 

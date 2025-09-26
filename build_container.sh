@@ -7,7 +7,7 @@ set -e  # Exit on any error
 
 # Configuration
 IMAGE_NAME="fintech-tools"
-VERSION="0.4"  # Updated with modern SLURM from Ubuntu repos and configuration fixes
+VERSION="0.42"  # Simplified container with GPU support, no SLURM/host binding conflicts
 TAR_FILE="$HOME/fintech-tools.tar"
 SIF_FILE="fintech-tools.sif"
 REMOTE_USER="gson"
@@ -404,7 +404,7 @@ print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Set up environment variables
 IMAGE_NAME="fintech-tools"
-VERSION="0.3"
+VERSION="0.42"
 SIF_FILE="fintech-tools.sif"
 
 print_status "Setting up build directory in toolbox..."
