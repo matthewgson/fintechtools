@@ -7,7 +7,7 @@ set -e # Exit on any error
 
 # Configuration
 IMAGE_NAME="fintech-tools"
-VERSION="0.6" # Neovim+LazyVim (html/python), Yazi (full deps), Zellij, uv, Claude Code CLI, gh Copilot, Python 3.13. R / TeX / h2o intentionally NOT included.
+VERSION="0.6" # v0.6: NVIDIA CUDA 12.3 runtime + nvidia-smi (nvidia-utils-545) for Singularity --nv GPU support (confirmed working on HPC)
 TAR_FILE="$HOME/fintech-tools.tar"
 SIF_FILE="fintech-tools.sif"
 REMOTE_USER="gson"
