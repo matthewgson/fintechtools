@@ -133,8 +133,8 @@ send_pushover_notification() {
 
 # Check if we're in Podman VM environment
 check_podman_vm() {
-  if [ -d "/run/host/Users" ]; then
-    return 0 # We're in Podman VM
+  if [ -d "/Users" ] && [ -d "/var/home" ]; then
+    return 0 # We're in Podman VM (virtiofs mounts Mac /Users at /Users)
   else
     return 1 # We're not in Podman VM
   fi
@@ -357,15 +357,15 @@ convert_in_podman_vm() {
 
   # Check if we have apptainer
   if ! command_exists apptainer; then
-    print_error "Apptainer not found. Make sure you're in the toolbox environment."
-    print_status "Run: toolbox enter"
+    print_error "Apptainer not found in Podman VM."
     exit 1
   fi
 
-  # Navigate to the host mount point if available
-  if [ -d "/run/host/Users/matthewson" ]; then
-    cd /run/host/Users/matthewson
-    print_status "Changed to /run/host/Users/matthewson"
+  # Navigate to Mac home directory (mounted via virtiofs at same path in VM)
+  MAC_USER=$(ls /Users/ | head -1)
+  if [ -d "/Users/$MAC_USER" ]; then
+    cd "/Users/$MAC_USER"
+    print_status "Changed to /Users/$MAC_USER"
   fi
 
   # Convert following README command exactly
@@ -388,15 +388,15 @@ auto_convert_via_podman_vm() {
   print_status "Entering Podman VM for apptainer conversion..."
   print_status "Using automatic conversion method..."
 
-  # Create a temporary script that will run inside the Podman VM
+  # Create a temporary script that will run inside the Podman VM.
+  # Use __MAC_HOME__ as a placeholder; sed replaces it with the real Mac $HOME
+  # before the script is copied to disk (virtiofs mounts Mac /Users at /Users in the VM).
   TEMP_SCRIPT=$(mktemp)
   cat >"$TEMP_SCRIPT" <<'EOF'
 #!/bin/bash
 
-# Colors for output inside VM
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
@@ -404,75 +404,54 @@ print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
-# Set up environment variables (these are unused below — kept for context)
-IMAGE_NAME="fintech-tools"
 SIF_FILE="fintech-tools.sif"
+MAC_HOME="__MAC_HOME__"
+HOST_TAR_FILE="$MAC_HOME/fintech-tools.tar"
 
-print_status "Setting up build directory..."
+# Set up apptainer tmp dir
 BUILD_DIR="$HOME/apptainer-builds"
 mkdir -p "$BUILD_DIR"
 export APPTAINER_TMPDIR="$BUILD_DIR"
 
-# Add to bashrc as per README
-if ! grep -q "APPTAINER_TMPDIR" ~/.bashrc; then
-    echo 'export APPTAINER_TMPDIR=~/apptainer-builds' >> ~/.bashrc
-    print_status "Added APPTAINER_TMPDIR to ~/.bashrc"
-fi
-
-# Check if we have apptainer
 if ! command -v apptainer >/dev/null 2>&1; then
     print_error "Apptainer not found in Podman VM"
     exit 1
 fi
 
-# Navigate to the host mount point and find the TAR file
-cd /run/host/Users/matthewson
-HOST_TAR_FILE="/run/host/Users/matthewson/fintech-tools.tar"
-
 if [ ! -f "$HOST_TAR_FILE" ]; then
     print_error "TAR file not found at $HOST_TAR_FILE"
-    print_status "Available files in directory:"
-    ls -la /run/host/Users/matthewson/*.tar 2>/dev/null || echo "No .tar files found"
+    ls -la "$MAC_HOME"/*.tar 2>/dev/null || echo "No .tar files found"
     exit 1
 fi
 
-print_status "Found TAR file at: $HOST_TAR_FILE"
-print_status "Changed to /run/host/Users/matthewson"
+# Build SIF directly into the Mac home directory
+cd "$MAC_HOME" || { print_error "Cannot cd to $MAC_HOME"; exit 1; }
 
-# Convert following README command exactly
+print_status "Found TAR file: $HOST_TAR_FILE"
 print_status "Converting Docker archive to Singularity image..."
-echo "Command: apptainer build --force --arch amd64 ${SIF_FILE} docker-archive://${HOST_TAR_FILE}"
+echo "Command: apptainer build --force --arch amd64 $SIF_FILE docker-archive://$HOST_TAR_FILE"
 
-if apptainer build --force --arch amd64 "${SIF_FILE}" "docker-archive://${HOST_TAR_FILE}"; then
-    print_success "Singularity image created: ${SIF_FILE}"
-    print_status "SIF file size: $(du -h "${SIF_FILE}" | cut -f1)"
-    
-    # Copy the SIF file back to host if we're in a different location
-    if [ -d "/run/host/Users/matthewson" ] && [ ! -f "/run/host/Users/matthewson/${SIF_FILE}" ]; then
-        cp "${SIF_FILE}" "/run/host/Users/matthewson/"
-        print_status "Copied SIF file to host directory"
-    fi
+if apptainer build --force --arch amd64 "$SIF_FILE" "docker-archive://$HOST_TAR_FILE"; then
+    print_success "Singularity image created: $MAC_HOME/$SIF_FILE"
+    print_status "SIF file size: $(du -h "$SIF_FILE" | cut -f1)"
 else
     print_error "Failed to convert to Singularity format"
     exit 1
 fi
 EOF
 
-  # Make the temporary script executable
+  # Inject the actual Mac home path (virtiofs mounts it at the same path in the VM)
+  sed -i '' "s|__MAC_HOME__|${HOME}|g" "$TEMP_SCRIPT"
   chmod +x "$TEMP_SCRIPT"
 
-  # Copy the script to a location accessible by Podman VM
   SCRIPT_NAME="convert_to_sif.sh"
   cp "$TEMP_SCRIPT" "$HOME/$SCRIPT_NAME"
 
   print_status "Created conversion script: $HOME/$SCRIPT_NAME"
   print_status "SSHing into Podman VM and running apptainer conversion..."
-  print_status "Step 1: Entering Podman machine (podman machine ssh)..."
-  print_status "Step 2: Running apptainer conversion..."
 
-  # Execute the conversion: apptainer is installed directly in the Podman VM,
-  # no toolbox wrapper needed.
-  podman machine ssh -- "bash /run/host/Users/$(whoami)/$SCRIPT_NAME"
+  # Mac's /Users is mounted at /Users in the Podman VM via virtiofs
+  podman machine ssh -- "bash /Users/$(whoami)/$SCRIPT_NAME"
 
   CONVERSION_EXIT_CODE=$?
 
@@ -481,20 +460,13 @@ EOF
 
   if [ $CONVERSION_EXIT_CODE -eq 0 ]; then
     print_success "Conversion completed successfully!"
-
-    # Check if SIF file was created in the expected location
-    if [ -f "$HOME/$SIF_FILE" ] || [ -f "./$SIF_FILE" ]; then
-      print_success "SIF file found and ready for transfer"
-      # Update the SIF_FILE path for the transfer function
-      if [ -f "$HOME/$SIF_FILE" ]; then
-        SIF_FILE="$HOME/$SIF_FILE"
-      fi
-    else
-      print_warning "SIF file may be in Podman VM. Checking..."
+    if [ -f "$HOME/$SIF_FILE" ]; then
+      print_success "SIF file ready: $HOME/$SIF_FILE"
+      SIF_FILE="$HOME/$SIF_FILE"
     fi
   else
-    print_error "Conversion failed in Podman VM toolbox"
-    print_status "You may need to check the TAR file location manually"
+    print_error "Conversion failed in Podman VM"
+    print_status "Check that $HOME/fintech-tools.tar exists and Podman VM is running."
     exit 1
   fi
 }
