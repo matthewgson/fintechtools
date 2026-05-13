@@ -153,7 +153,7 @@ cleanup_containers_using_image() {
     echo "$containers_using_image"
     echo
 
-    read -r -p "Do you want to remove these containers? (Y/n): " REPLY < /dev/tty
+    read -r -p "Do you want to remove these containers? (Y/n): " REPLY </dev/tty
     echo
 
     if [[ ! $REPLY =~ ^[Nn]$ ]]; then
@@ -233,7 +233,7 @@ main() {
   print_status "Step 1: Checking for existing images and building Docker image with Podman..."
 
   # Check if image exists and handle it properly
-  DO_BUILD=1  # 1 = build, 0 = skip
+  DO_BUILD=1 # 1 = build, 0 = skip
 
   if podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -qE "^(localhost/)?${IMAGE_NAME}:${VERSION}$"; then
     print_warning "Existing image found: ${IMAGE_NAME}:${VERSION}"
@@ -243,32 +243,32 @@ main() {
     podman images "localhost/${IMAGE_NAME}:${VERSION}" --format "table {{.Repository}}:{{.Tag}}  {{.Created}}  {{.Size}}"
 
     echo
-    read -r -p "Do you want to rebuild the image? (y/N): " REBUILD_ANSWER < /dev/tty
+    read -r -p "Do you want to rebuild the image? (y/N): " REBUILD_ANSWER </dev/tty
     echo
 
     case "${REBUILD_ANSWER}" in
-      [yY]|[yY][eE][sS])
-        print_status "Rebuilding image: ${IMAGE_NAME}:${VERSION}"
+    [yY] | [yY][eE][sS])
+      print_status "Rebuilding image: ${IMAGE_NAME}:${VERSION}"
 
-        # Check and clean up any containers using this image
-        cleanup_containers_using_image "${IMAGE_NAME}:${VERSION}"
+      # Check and clean up any containers using this image
+      cleanup_containers_using_image "${IMAGE_NAME}:${VERSION}"
 
-        # Remove the image
-        if podman image rm -f "localhost/${IMAGE_NAME}:${VERSION}"; then
-          print_success "✓ Existing image removed successfully"
-        else
-          print_error "Failed to remove existing image."
-          print_status "This might be due to:"
-          echo "  1. Containers still using the image (check: podman ps -a)"
-          echo "  2. Image being used by other processes"
-          echo "  3. Permission issues"
-          exit 1
-        fi
-        ;;
-      *)
-        print_status "Keeping existing image. Skipping build — proceeding to next steps."
-        DO_BUILD=0
-        ;;
+      # Remove the image
+      if podman image rm -f "localhost/${IMAGE_NAME}:${VERSION}"; then
+        print_success "✓ Existing image removed successfully"
+      else
+        print_error "Failed to remove existing image."
+        print_status "This might be due to:"
+        echo "  1. Containers still using the image (check: podman ps -a)"
+        echo "  2. Image being used by other processes"
+        echo "  3. Permission issues"
+        exit 1
+      fi
+      ;;
+    *)
+      print_status "Keeping existing image. Skipping build — proceeding to next steps."
+      DO_BUILD=0
+      ;;
     esac
   else
     print_status "No existing image found. Proceeding with fresh build."
@@ -383,12 +383,12 @@ convert_in_podman_vm() {
   fi
 }
 
-# Automatically enter Podman VM and toolbox for conversion
+# Automatically enter Podman VM and run apptainer conversion
 auto_convert_via_podman_vm() {
-  print_status "Automatically entering Podman VM and toolbox for conversion..."
+  print_status "Entering Podman VM for apptainer conversion..."
   print_status "Using automatic conversion method..."
 
-  # Create a temporary script that will run inside the toolbox
+  # Create a temporary script that will run inside the Podman VM
   TEMP_SCRIPT=$(mktemp)
   cat >"$TEMP_SCRIPT" <<'EOF'
 #!/bin/bash
@@ -408,7 +408,7 @@ print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 IMAGE_NAME="fintech-tools"
 SIF_FILE="fintech-tools.sif"
 
-print_status "Setting up build directory in toolbox..."
+print_status "Setting up build directory..."
 BUILD_DIR="$HOME/apptainer-builds"
 mkdir -p "$BUILD_DIR"
 export APPTAINER_TMPDIR="$BUILD_DIR"
@@ -421,7 +421,7 @@ fi
 
 # Check if we have apptainer
 if ! command -v apptainer >/dev/null 2>&1; then
-    print_error "Apptainer not found in toolbox environment"
+    print_error "Apptainer not found in Podman VM"
     exit 1
 fi
 
@@ -466,19 +466,13 @@ EOF
   cp "$TEMP_SCRIPT" "$HOME/$SCRIPT_NAME"
 
   print_status "Created conversion script: $HOME/$SCRIPT_NAME"
-  print_status "Following README steps: podman machine ssh -> toolbox enter -> conversion"
-
-  # Step 1: Enter Podman machine SSH (following README exactly)
+  print_status "SSHing into Podman VM and running apptainer conversion..."
   print_status "Step 1: Entering Podman machine (podman machine ssh)..."
-  print_status "Step 2: Entering toolbox environment (toolbox enter)..."
-  print_status "Step 3: Running apptainer conversion..."
+  print_status "Step 2: Running apptainer conversion..."
 
-  # Execute the conversion following README steps exactly:
-  # 1. podman machine ssh
-  # 2. toolbox enter
-  # 3. run the conversion script
-  # Combined into: podman machine ssh -- "toolbox run script"
-  podman machine ssh -- "toolbox run bash /run/host/Users/$(whoami)/$SCRIPT_NAME"
+  # Execute the conversion: apptainer is installed directly in the Podman VM,
+  # no toolbox wrapper needed.
+  podman machine ssh -- "bash /run/host/Users/$(whoami)/$SCRIPT_NAME"
 
   CONVERSION_EXIT_CODE=$?
 
@@ -511,7 +505,7 @@ offer_transfer_to_hpc() {
     echo
     print_status "Deploy to HPC System"
     send_pushover_notification "🔐 Transfer Ready" "Container build complete! Ready to transfer ${SIF_FILE} to CIRCE HPC. Please check your terminal to confirm transfer."
-        read -r -p "Do you want to transfer ${SIF_FILE} to CIRCE HPC? (y/N): " REPLY < /dev/tty
+    read -r -p "Do you want to transfer ${SIF_FILE} to CIRCE HPC? (y/N): " REPLY </dev/tty
     echo
 
     if [[ $REPLY =~ ^[Yy]$ ]]; then
