@@ -252,53 +252,40 @@ RUN npm install -g @anthropic-ai/claude-code
 RUN useradd -m -s /bin/bash gson && \
     echo "gson ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
-# ─── Stage 13: LazyVim setup + extras + Copilot ext (as gson) ───────────────
-USER gson
+# NOTE: LazyVim config is NOT bootstrapped here.
+# Singularity bind-mounts /home/g/gson → /home/gson at runtime, so anything
+# written to ~/.config/nvim during the build would be hidden at runtime.
+# Set up LazyVim on CIRCE directly (see README for steps).
+
 ENV HOME=/home/gson
 ENV XDG_CONFIG_HOME=/home/gson/.config
 ENV XDG_DATA_HOME=/home/gson/.local/share
 ENV XDG_STATE_HOME=/home/gson/.local/state
 ENV XDG_CACHE_HOME=/home/gson/.cache
 
-RUN git clone --depth 1 https://github.com/LazyVim/starter \
-        /home/gson/.config/nvim && \
-    rm -rf /home/gson/.config/nvim/.git
+# ─── Final configuration ────────────────────────────────────────────────────
+# Aliases and the yazi shell function go into /etc/bash.bashrc (sourced by
+# all interactive bash sessions) rather than ~/.bashrc, because the home dir
+# is bind-mounted from the host at runtime and overwrites the image's copy.
+RUN ln -sf "$(which fdfind)" /usr/local/bin/fd 2>/dev/null || true && \
+    cat >> /etc/bash.bashrc << 'EOF'
 
-# LazyVim extras — see https://www.lazyvim.org/extras
-RUN cat > /home/gson/.config/nvim/lua/plugins/lazyvim-extras.lua << 'EOF'
-return {
-  -- AI assistance
-  { import = "lazyvim.plugins.extras.ai.copilot" },
+# ── container aliases ────────────────────────────────────────────────────────
+export PATH="$HOME/.local/bin:$PATH"
+alias vi="nvim"
+alias vim="nvim"
 
-  -- Language support: html, python (+ common companions). lang.r and
-  -- lang.tex removed in v0.6 — re-enable if you bring R/TeX back.
-  { import = "lazyvim.plugins.extras.lang.html" },
-  { import = "lazyvim.plugins.extras.lang.python" },
-  { import = "lazyvim.plugins.extras.lang.git" },
-  { import = "lazyvim.plugins.extras.lang.json" },
-  { import = "lazyvim.plugins.extras.lang.markdown" },
-  { import = "lazyvim.plugins.extras.lang.yaml" },
-  { import = "lazyvim.plugins.extras.lang.toml" },
+# ── yazi: `y` opens yazi; quitting with q cd's the shell to the last dir ────
+function y() {
+    local tmp cwd
+    tmp="$(mktemp -t "yazi-cwd.XXXXXX")"
+    yazi "$@" --cwd-file="$tmp"
+    if cwd="$(command cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
+        builtin cd -- "$cwd"
+    fi
+    rm -f -- "$tmp"
 }
 EOF
-
-# Copilot CLI gh extension (auth done at runtime)
-RUN gh extension install github/gh-copilot --force 2>/dev/null || true
-
-# Pre-bootstrap LazyVim (two passes: bootstrap, then ensure all extras synced)
-RUN nvim --headless "+Lazy! sync" +qa 2>&1 || true && \
-    nvim --headless "+Lazy! sync" +qa 2>&1 || true
-
-USER root
-
-# R packages stage removed in v0.6 — languageserver, tinytex, h2o, RQuantLib
-# are all gone with R itself. Re-add if you bring R back.
-
-# ─── Final configuration ────────────────────────────────────────────────────
-RUN echo 'export PATH="$HOME/.local/bin:$PATH"' >> /home/gson/.bashrc && \
-    echo 'alias vi="nvim"'  >> /home/gson/.bashrc && \
-    echo 'alias vim="nvim"' >> /home/gson/.bashrc && \
-    ln -sf "$(which fdfind)" /usr/local/bin/fd 2>/dev/null || true
 
 CMD ["/bin/bash"]
 USER gson
