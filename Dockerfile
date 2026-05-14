@@ -249,7 +249,7 @@ RUN npm install -g @anthropic-ai/claude-code
 # build-time UID here is irrelevant for file access. We use the default (1000)
 # because rootless podman's user namespace can't map the HPC's high IDs
 # (UID 70230911, GIDs 663800067/663800106) — crun's setresuid/setgroups would fail.
-RUN useradd -m -s /bin/bash gson && \
+RUN useradd -m -s /bin/zsh gson && \
     echo "gson ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 # NOTE: LazyVim config is NOT bootstrapped here.
@@ -258,34 +258,25 @@ RUN useradd -m -s /bin/bash gson && \
 # Set up LazyVim on CIRCE directly (see README for steps).
 
 ENV HOME=/home/gson
+ENV SHELL=/bin/zsh
 ENV XDG_CONFIG_HOME=/home/gson/.config
 ENV XDG_DATA_HOME=/home/gson/.local/share
 ENV XDG_STATE_HOME=/home/gson/.local/state
 ENV XDG_CACHE_HOME=/home/gson/.cache
 
 # ─── Final configuration ────────────────────────────────────────────────────
-# Aliases and the yazi shell function go into /etc/bash.bashrc (sourced by
-# all interactive bash sessions) rather than ~/.bashrc, because the home dir
-# is bind-mounted from the host at runtime and overwrites the image's copy.
+# Aliases go into /etc/zsh/zshrc (sourced by all interactive zsh sessions)
+# rather than ~/.zshrc, because the home dir is bind-mounted from the host
+# at runtime and overwrites the image's copy.
 RUN ln -sf "$(which fdfind)" /usr/local/bin/fd 2>/dev/null || true && \
-    cat >> /etc/bash.bashrc << 'EOF'
+    mkdir -p /etc/zsh && \
+    cat >> /etc/zsh/zshrc << 'EOF'
 
 # ── container aliases ────────────────────────────────────────────────────────
 export PATH="$HOME/.local/bin:$PATH"
 alias vi="nvim"
 alias vim="nvim"
-
-# ── yazi: `y` opens yazi; quitting with q cd's the shell to the last dir ────
-function y() {
-    local tmp cwd
-    tmp="$(mktemp -t "yazi-cwd.XXXXXX")"
-    yazi "$@" --cwd-file="$tmp"
-    if cwd="$(command cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
-        builtin cd -- "$cwd"
-    fi
-    rm -f -- "$tmp"
-}
 EOF
 
-CMD ["/bin/bash"]
+CMD ["/bin/zsh"]
 USER gson

@@ -64,5 +64,5 @@ ssh \
     "$REMOTE_USER@$NODE" \
     "TERM=xterm-256color COLUMNS=$COLS LINES=$ROWS \
      $SINGULARITY exec instance://$INSTANCE \
-     bash -c 'stty cols $COLS rows $ROWS 2>/dev/null; \
-              zellij attach nvim 2>/dev/null || zellij --session nvim'"
+     zsh -c 'stty cols $COLS rows $ROWS 2>/dev/null; \
+             zellij attach nvim 2>/dev/null || zellij --session nvim'"
