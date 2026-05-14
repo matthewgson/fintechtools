@@ -54,7 +54,7 @@ echo ""
 SINGULARITY=/apps/singularity/3.5.3/bin/singularity
 ssh \
     -J "$LOGIN_ALIAS" \
-    -t \
+    -tt \
     "$REMOTE_USER@$NODE" \
-    "$SINGULARITY exec instance://$INSTANCE \
+    "TERM=xterm-256color $SINGULARITY exec instance://$INSTANCE \
        bash -c 'zellij attach nvim 2>/dev/null || zellij --session nvim'"
