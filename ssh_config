@@ -21,7 +21,7 @@ Host vscode-container
   User gson
   ProxyJump circe_login
   Port 2222
-  IdentityFile ~/.ssh/local_mac_to_singularity
+  IdentityFile ~/.ssh/circe_key
   StrictHostKeyChecking no
   UserKnownHostsFile /dev/null
   ForwardAgent yes
@@ -30,7 +30,7 @@ Host posit
   HostName localhost
   User gson
   Port 2223
-  IdentityFile ~/.ssh/local_mac_to_singularity
+  IdentityFile ~/.ssh/circe_key
   StrictHostKeyChecking no
   UserKnownHostsFile /dev/null
   ForwardAgent yes

@@ -10,13 +10,14 @@
 # On reconnect:      re-attaches to the existing session with your state intact
 #
 # Requires:
-#   ~/.ssh/local_mac_to_singularity  (private key for container SSH)
+#   ~/.ssh/circe_key  (private key for container SSH)
 #   nvim_session.sh running on CIRCE via sbatch
 
-LOGIN_NODE="circe.rc.usf.edu"
+# SSH config alias for CIRCE login node (must match Host entry in ~/.ssh/config)
+LOGIN_ALIAS="circe"
 REMOTE_USER="gson"
 SSH_PORT=2222
-SSH_KEY="$HOME/.ssh/local_mac_to_singularity"
+SSH_KEY="$HOME/.ssh/circe_key"
 JOB_NAME="nvim_session"
 
 # ─── Check key exists ─────────────────────────────────────────────────────────
@@ -32,7 +33,7 @@ if [ -n "$1" ]; then
 else
     echo "Looking for running '$JOB_NAME' job on CIRCE..."
     NODE=$(ssh -o BatchMode=yes -o ConnectTimeout=10 \
-        "$REMOTE_USER@$LOGIN_NODE" \
+        "$LOGIN_ALIAS" \
         "squeue -u $REMOTE_USER -n $JOB_NAME -h -o '%N' 2>/dev/null | head -1")
 
     if [ -z "$NODE" ]; then
@@ -40,8 +41,8 @@ else
         echo "No '$JOB_NAME' job is running."
         echo ""
         echo "Start one:"
-        echo "  ssh $REMOTE_USER@$LOGIN_NODE"
-        echo "  sbatch ~/containers/$JOB_NAME.sh"
+        echo "  ssh $LOGIN_ALIAS"
+        echo "  sbatch ~/containers/term_session.sh"
         echo ""
         echo "Once it's running, rerun: ./connect_nvim.sh"
         exit 1
@@ -55,7 +56,7 @@ echo ""
 
 # ─── SSH into container and attach (or create) the Zellij 'nvim' session ─────
 ssh \
-    -J "$REMOTE_USER@$LOGIN_NODE" \
+    -J "$LOGIN_ALIAS" \
     "$REMOTE_USER@$NODE" \
     -p "$SSH_PORT" \
     -i "$SSH_KEY" \

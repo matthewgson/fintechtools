@@ -136,10 +136,14 @@ else
     echo "⚠ Note: nvidia-smi not available (expected if no GPU bound)"
 fi
 
+# Create privsep directory required by sshd (fails silently if already exists)
+singularity exec instance://fintech_ssh_container mkdir -p /run/sshd 2>/dev/null || true
+
 # Start SSH daemon inside the container for remote access
 echo "Starting SSH daemon in container..."
 if singularity exec instance://fintech_ssh_container test -f /usr/sbin/sshd; then
-    singularity exec instance://fintech_ssh_container /usr/sbin/sshd -f /etc/ssh/sshd_config -D &
+    singularity exec instance://fintech_ssh_container \
+        /usr/sbin/sshd -f /etc/ssh/sshd_config -o "UsePrivilegeSeparation no" -D &
     SSH_PID=$!
     sleep 3
     

@@ -121,10 +121,14 @@ if ! singularity instance list | grep -q "$INSTANCE"; then
 fi
 echo "✓ Container instance started successfully"
 
+# Create privsep directory required by sshd (fails silently if already exists)
+singularity exec "instance://$INSTANCE" mkdir -p /run/sshd 2>/dev/null || true
+
 # Start SSH daemon inside the container for remote access
 echo "Starting SSH daemon in container..."
 if singularity exec instance://$INSTANCE test -f /usr/sbin/sshd; then
-    singularity exec instance://$INSTANCE /usr/sbin/sshd -f /etc/ssh/sshd_config -D &
+    singularity exec instance://$INSTANCE \
+        /usr/sbin/sshd -f /etc/ssh/sshd_config -o "UsePrivilegeSeparation no" -D &
     SSH_PID=$!
     sleep 3
 
@@ -148,7 +152,7 @@ echo "   ./connect_nvim.sh"
 echo ""
 echo " Or manually:"
 echo "   ssh -J $USER@$LOGIN_NODE $USER@$COMPUTE_NODE \\"
-echo "     -p $SSH_PORT -i ~/.ssh/local_mac_to_singularity \\"
+echo "     -p $SSH_PORT -i ~/.ssh/circe_key \\"
 echo "     -t 'zellij attach nvim 2>/dev/null || zellij --session nvim'"
 echo ""
 echo " Your Zellij session 'nvim' persists inside the container."

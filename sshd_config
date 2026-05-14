@@ -8,6 +8,7 @@ PasswordAuthentication yes
 PubkeyAuthentication yes
 UsePAM no
 StrictModes no
+UsePrivilegeSeparation no
 PidFile ~/ssh_keys/sshd.pid
 Subsystem sftp /usr/lib/openssh/sftp-server
 LogLevel VERBOSE
