@@ -65,4 +65,6 @@ ssh \
     "TERM=xterm-256color COLUMNS=$COLS LINES=$ROWS \
      $SINGULARITY exec instance://$INSTANCE \
      zsh -c 'stty cols $COLS rows $ROWS 2>/dev/null; \
-             zellij attach nvim 2>/dev/null || zellij --session nvim'"
+             zellij attach nvim 2>/dev/null || zellij --session nvim'; \
+     echo ''; echo '--- exited container --- (type exit to disconnect)'; \
+     exec \$SHELL -l"
