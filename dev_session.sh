@@ -139,6 +139,17 @@ fi
 # Create privsep directory required by sshd (fails silently if already exists)
 singularity exec instance://fintech_ssh_container mkdir -p /run/sshd 2>/dev/null || true
 
+# Singularity user-namespace maps the process to a kernel UID that differs
+# from the LDAP UID injected into /etc/passwd.  sshd calls setresuid(ldap_uid)
+# which fails because the process is already kernel_uid ≠ ldap_uid and is not
+# root.  Fix: overwrite the passwd entry with the actual effective UID/GID.
+ACTUAL_UID=$(singularity exec instance://fintech_ssh_container id -u)
+ACTUAL_GID=$(singularity exec instance://fintech_ssh_container id -g)
+echo "Patching /etc/passwd in container: ${USER} uid=${ACTUAL_UID} gid=${ACTUAL_GID}"
+singularity exec instance://fintech_ssh_container bash -c \
+    "sed -i 's/^\(${USER}\):x:[0-9]*:[0-9]*/\1:x:${ACTUAL_UID}:${ACTUAL_GID}/' /etc/passwd" \
+    2>/dev/null || true
+
 # Start SSH daemon inside the container for remote access
 echo "Starting SSH daemon in container..."
 if singularity exec instance://fintech_ssh_container test -f /usr/sbin/sshd; then

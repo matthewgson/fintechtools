@@ -24,19 +24,12 @@ START_TIME=$(date '+%Y-%m-%d %H:%M:%S %Z')
 
 INSTANCE="fintech_nvim"
 SIF="$HOME/containers/fintech-tools.sif"
-SSH_PORT=2222
 LOGIN_NODE="circe.rc.usf.edu"
 
 # Set up cleanup function for graceful shutdown
 export GID=$$
 cleanup() {
     echo "Performing cleanup operations..."
-
-    # Stop SSH daemon if it's running
-    if [ ! -z "$SSH_PID" ] && kill -0 $SSH_PID 2>/dev/null; then
-        echo "Stopping SSH daemon (PID: $SSH_PID)..."
-        kill $SSH_PID 2>/dev/null
-    fi
 
     # Stop the Singularity instance with retries
     echo "Stopping Singularity container..."
@@ -80,9 +73,8 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Start Time: $START_TIME"
 echo "Compute Node: $COMPUTE_NODE"
 echo "Node IP: $NODE_IP"
-echo "SSH Port: $SSH_PORT"
 echo "Container: fintech-tools.sif (v0.6 - CPU only)"
-echo "SSH Command: ssh -J $USER@$LOGIN_NODE $USER@$COMPUTE_NODE -p $SSH_PORT"
+echo "Connect: ssh -J gson@$LOGIN_NODE -t gson@$COMPUTE_NODE '/apps/singularity/3.5.3/bin/singularity exec instance://$INSTANCE bash -c \"zellij attach nvim 2>/dev/null || zellij --session nvim\"'"
 echo "========================================="
 
 # Verify SIF exists
@@ -99,13 +91,12 @@ if singularity instance list | grep -q "$INSTANCE"; then
     sleep 3
 fi
 
-echo "Starting Singularity container with SSH support..."
+echo "Starting Singularity container..."
 singularity instance start \
     --no-home \
     --bind /work_bgfs/g/$USER:/work_bgfs/g/$USER \
     --bind /home/g/$USER:/home/$USER \
     --bind /shares:/shares \
-    --bind /home/g/gson/ssh_keys:/etc/ssh \
     "$SIF" \
     "$INSTANCE"
 
@@ -121,29 +112,6 @@ if ! singularity instance list | grep -q "$INSTANCE"; then
 fi
 echo "✓ Container instance started successfully"
 
-# Create privsep directory required by sshd (fails silently if already exists)
-singularity exec "instance://$INSTANCE" mkdir -p /run/sshd 2>/dev/null || true
-
-# Start SSH daemon inside the container for remote access
-echo "Starting SSH daemon in container..."
-if singularity exec instance://$INSTANCE test -f /usr/sbin/sshd; then
-    singularity exec instance://$INSTANCE \
-        /usr/sbin/sshd -f /etc/ssh/sshd_config -o "UsePrivilegeSeparation no" -D &
-    SSH_PID=$!
-    sleep 3
-
-    # Verify SSH daemon is running
-    if kill -0 $SSH_PID 2>/dev/null; then
-        echo "✓ SSH daemon started successfully (PID: $SSH_PID)"
-    else
-        echo "❌ ERROR: SSH daemon failed to start"
-        exit 1
-    fi
-else
-    echo "❌ ERROR: SSH daemon not found in container"
-    exit 1
-fi
-
 echo "========================================="
 echo " READY — Neovim session is live"
 echo ""
@@ -151,9 +119,9 @@ echo " From Mac, run:"
 echo "   ./connect_nvim.sh"
 echo ""
 echo " Or manually:"
-echo "   ssh -J $USER@$LOGIN_NODE $USER@$COMPUTE_NODE \\"
-echo "     -p $SSH_PORT -i ~/.ssh/circe_key \\"
-echo "     -t 'zellij attach nvim 2>/dev/null || zellij --session nvim'"
+echo "   ssh -J gson@$LOGIN_NODE -t gson@$COMPUTE_NODE \\"
+echo "     '/apps/singularity/3.5.3/bin/singularity exec instance://$INSTANCE \\"
+echo "      bash -c \"zellij attach nvim 2>/dev/null || zellij --session nvim\"'"
 echo ""
 echo " Your Zellij session 'nvim' persists inside the container."
 echo " Disconnect and reconnect as many times as you like."

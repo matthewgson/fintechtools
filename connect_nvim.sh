@@ -10,21 +10,14 @@
 # On reconnect:      re-attaches to the existing session with your state intact
 #
 # Requires:
-#   ~/.ssh/circe_key  (private key for container SSH)
-#   nvim_session.sh running on CIRCE via sbatch
+#   ~/.ssh/config entry for Host circe with IdentityFile ~/.ssh/circe_key
+#   nvim_session running on CIRCE via sbatch
 
 # SSH config alias for CIRCE login node (must match Host entry in ~/.ssh/config)
 LOGIN_ALIAS="circe"
 REMOTE_USER="gson"
-SSH_PORT=2222
-SSH_KEY="$HOME/.ssh/circe_key"
+INSTANCE="fintech_nvim"
 JOB_NAME="nvim_session"
-
-# ─── Check key exists ─────────────────────────────────────────────────────────
-if [ ! -f "$SSH_KEY" ]; then
-    echo "ERROR: SSH key not found at $SSH_KEY"
-    exit 1
-fi
 
 # ─── Find compute node ────────────────────────────────────────────────────────
 if [ -n "$1" ]; then
@@ -50,16 +43,18 @@ else
     echo "Found job on node: $NODE"
 fi
 
-echo "Connecting to container on $NODE:$SSH_PORT ..."
-echo "(First time: run 'zellij --session nvim' then 'nvim' inside)"
+echo "Connecting to container on $NODE ..."
+echo "(First time: run 'nvim' inside the Zellij session)"
 echo ""
 
-# ─── SSH into container and attach (or create) the Zellij 'nvim' session ─────
+# ─── SSH to compute node and exec into the running Singularity instance ───────
+# Uses the compute node's native SSH (no container sshd needed).
+# Uses absolute path to singularity binary — module system not available in
+# non-login SSH exec sessions.
+SINGULARITY=/apps/singularity/3.5.3/bin/singularity
 ssh \
     -J "$LOGIN_ALIAS" \
+    -t \
     "$REMOTE_USER@$NODE" \
-    -p "$SSH_PORT" \
-    -i "$SSH_KEY" \
-    -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null \
-    -t "zellij attach nvim 2>/dev/null || zellij --session nvim"
+    "$SINGULARITY exec instance://$INSTANCE \
+       bash -c 'zellij attach nvim 2>/dev/null || zellij --session nvim'"
