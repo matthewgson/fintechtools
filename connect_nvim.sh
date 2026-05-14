@@ -47,6 +47,12 @@ echo "Connecting to container on $NODE ..."
 echo "(First time: run 'nvim' inside the Zellij session)"
 echo ""
 
+# ─── Capture local terminal dimensions ───────────────────────────────────────
+# singularity exec doesn't forward TIOCGWINSZ, so Zellij sees the wrong size.
+# We read dimensions here and apply them inside via stty.
+COLS=$(tput cols 2>/dev/null || echo 220)
+ROWS=$(tput lines 2>/dev/null || echo 50)
+
 # ─── SSH to compute node and exec into the running Singularity instance ───────
 # Uses the compute node's native SSH (no container sshd needed).
 # Uses absolute path to singularity binary — module system not available in
@@ -56,5 +62,7 @@ ssh \
     -J "$LOGIN_ALIAS" \
     -tt \
     "$REMOTE_USER@$NODE" \
-    "TERM=xterm-256color $SINGULARITY exec instance://$INSTANCE \
-       bash -c 'zellij attach nvim 2>/dev/null || zellij --session nvim'"
+    "TERM=xterm-256color COLUMNS=$COLS LINES=$ROWS \
+     $SINGULARITY exec instance://$INSTANCE \
+     bash -c 'stty cols $COLS rows $ROWS 2>/dev/null; \
+              zellij attach nvim 2>/dev/null || zellij --session nvim'"
