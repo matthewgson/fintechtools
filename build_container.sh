@@ -7,7 +7,7 @@ set -e # Exit on any error
 
 # Configuration
 IMAGE_NAME="fintech-tools"
-VERSION="0.6" # v0.6: NVIDIA CUDA 12.3 runtime + nvidia-smi (nvidia-utils-545) for Singularity --nv GPU support (confirmed working on HPC)
+VERSION="0.7" # v0.7: Neovim + Python 3.13 + uv; gh-copilot installed via direct binary (no auth required at build time)
 TAR_FILE="$HOME/fintech-tools.tar"
 SIF_FILE="fintech-tools.sif"
 REMOTE_USER="gson"
@@ -177,6 +177,35 @@ cleanup_containers_using_image() {
   fi
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SSH connection multiplexer
+# Opens one authenticated connection; scp/rsync/ssh reuse the socket so the
+# user is only prompted for a password ONCE across all HPC transfers.
+# ─────────────────────────────────────────────────────────────────────────────
+SSH_CONTROL_SOCKET=""
+
+setup_ssh_mux() {
+  SSH_CONTROL_SOCKET="$(mktemp -u /tmp/circe_mux_XXXXXX)"
+  print_status "Opening SSH connection to ${REMOTE_HOST} (enter password once for all transfers)..."
+  if ssh -fNM \
+       -o ControlMaster=yes \
+       -o ControlPath="${SSH_CONTROL_SOCKET}" \
+       -o ControlPersist=30m \
+       "${REMOTE_USER}@${REMOTE_HOST}"; then
+    print_success "✓ SSH connection established (multiplexed)"
+  else
+    print_warning "SSH multiplexing unavailable — transfers will prompt individually"
+    SSH_CONTROL_SOCKET=""
+  fi
+}
+
+teardown_ssh_mux() {
+  [ -z "$SSH_CONTROL_SOCKET" ] && return
+  ssh -O exit -o ControlPath="${SSH_CONTROL_SOCKET}" "${REMOTE_USER}@${REMOTE_HOST}" 2>/dev/null || true
+  rm -f "${SSH_CONTROL_SOCKET}"
+  SSH_CONTROL_SOCKET=""
+}
+
 # Main function
 main() {
   # Start total timer
@@ -318,8 +347,11 @@ main() {
 
   # Step 4: Offer transfer to HPC (from README Step 3)
   print_status "Step 4: HPC deployment preparation..."
+  setup_ssh_mux
   start_timer
   offer_transfer_to_hpc
+  offer_transfer_configs
+  teardown_ssh_mux
   end_timer "HPC transfer process"
 
   # Calculate and display total time
@@ -471,6 +503,130 @@ EOF
   fi
 }
 
+# Transfer ~/.config folders and .zshrc to HPC
+offer_transfer_configs() {
+  local SCRIPT_DIR
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local ZSHRC_LOCAL="${SCRIPT_DIR}/.zshrc"
+
+  echo
+  print_status "Sync ~/.config folders + .zshrc to CIRCE"
+  read -r -p "Sync config folders (nvim, starship, yazi, zellij, etc.) to ${REMOTE_USER}@${REMOTE_HOST}? (y/N): " REPLY </dev/tty
+  echo
+
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    print_status "Skipping config sync"
+    return 0
+  fi
+
+  # Rsync selected ~/.config sub-directories to remote ~/.config/
+  # starship is intentionally excluded: run once inside the container on CIRCE:
+  #   starship preset nerd-font-symbols -o ~/.config/starship.toml
+  local CONFIGS=(
+    avante.nvim
+    git
+    github-copilot
+    htop
+    nvim
+    yazi
+    zellij
+  )
+
+  print_status "Syncing ~/.config folders to ${REMOTE_USER}@${REMOTE_HOST}:~/.config/ ..."
+  local rsync_sources=()
+  for cfg in "${CONFIGS[@]}"; do
+    local src="$HOME/.config/$cfg"
+    if [ -e "$src" ]; then
+      rsync_sources+=("$src")
+    else
+      print_warning "  Skipping missing: ~/.config/$cfg"
+    fi
+  done
+
+  if [ ${#rsync_sources[@]} -gt 0 ]; then
+    local -a MUX=()
+    [ -n "$SSH_CONTROL_SOCKET" ] && MUX=(-o ControlMaster=auto -o ControlPath="${SSH_CONTROL_SOCKET}")
+    local SSH_E="ssh"
+    [ -n "$SSH_CONTROL_SOCKET" ] && SSH_E="ssh -o ControlMaster=auto -o ControlPath=${SSH_CONTROL_SOCKET}"
+
+    # Pre-create remote ~/.config so openrsync (macOS) works without --mkpath
+    ssh "${MUX[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p ~/.config" 2>/dev/null
+    if rsync -avz -e "$SSH_E" "${rsync_sources[@]}" \
+        "${REMOTE_USER}@${REMOTE_HOST}:~/.config/"; then
+      print_success "✓ Config folders synced successfully"
+      print_status "Starship not copied — run once inside the container on CIRCE to set up:"
+      echo "    starship preset nerd-font-symbols -o ~/.config/starship.toml"
+    else
+      print_error "Failed to sync config folders"
+    fi
+  fi
+
+  # Transfer .zshrc
+  if [ ! -f "$ZSHRC_LOCAL" ]; then
+    print_warning ".zshrc not found at ${ZSHRC_LOCAL} — skipping"
+    return 0
+  fi
+
+  print_status "Transferring .zshrc to ${REMOTE_USER}@${REMOTE_HOST}:~/.zshrc ..."
+  local -a MUX=()
+  [ -n "$SSH_CONTROL_SOCKET" ] && MUX=(-o ControlMaster=auto -o ControlPath="${SSH_CONTROL_SOCKET}")
+  if ssh "${MUX[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "[ -f ~/.zshrc ]" 2>/dev/null; then
+    print_warning "~/.zshrc already exists on ${REMOTE_HOST}!"
+    read -r -p "Overwrite ~/.zshrc on CIRCE? (y/N): " OVERWRITE_REPLY </dev/tty
+    echo
+    if [[ ! $OVERWRITE_REPLY =~ ^[Yy]$ ]]; then
+      print_status "Skipping .zshrc transfer — file NOT overwritten"
+      return 0
+    fi
+  fi
+
+  if scp "${MUX[@]}" "$ZSHRC_LOCAL" "${REMOTE_USER}@${REMOTE_HOST}:~/.zshrc"; then
+    print_success "✓ .zshrc transferred to CIRCE"
+  else
+    print_error "Failed to transfer .zshrc"
+  fi
+}
+
+# Transfer .zshrc to HPC
+offer_transfer_zshrc() {
+  local SCRIPT_DIR
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local ZSHRC_LOCAL="${SCRIPT_DIR}/.zshrc"
+
+  if [ ! -f "$ZSHRC_LOCAL" ]; then
+    print_warning ".zshrc not found at ${ZSHRC_LOCAL} — skipping transfer"
+    return 0
+  fi
+
+  echo
+  print_status "Transfer .zshrc to CIRCE"
+  read -r -p "Transfer .zshrc to ${REMOTE_USER}@${REMOTE_HOST}:~/.zshrc? (y/N): " REPLY </dev/tty
+  echo
+
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    print_status "Skipping .zshrc transfer"
+    return 0
+  fi
+
+  # Warn before overwrite
+  if ssh "${REMOTE_USER}@${REMOTE_HOST}" "[ -f ~/.zshrc ]" 2>/dev/null; then
+    print_warning "~/.zshrc already exists on ${REMOTE_HOST}!"
+    read -r -p "Overwrite ~/.zshrc on CIRCE? (y/N): " OVERWRITE_REPLY </dev/tty
+    echo
+    if [[ ! $OVERWRITE_REPLY =~ ^[Yy]$ ]]; then
+      print_status "Skipping .zshrc transfer — file NOT overwritten"
+      return 0
+    fi
+  fi
+
+  print_status "Transferring .zshrc to ${REMOTE_USER}@${REMOTE_HOST}..."
+  if scp "$ZSHRC_LOCAL" "${REMOTE_USER}@${REMOTE_HOST}:~/.zshrc"; then
+    print_success "✓ .zshrc transferred to CIRCE"
+  else
+    print_error "Failed to transfer .zshrc"
+  fi
+}
+
 # Transfer to HPC (README Step 3)
 offer_transfer_to_hpc() {
   if [ -f "${SIF_FILE}" ]; then
@@ -487,7 +643,9 @@ offer_transfer_to_hpc() {
 
       # Time the transfer
       transfer_start=$(date +%s)
-      scp "${SIF_FILE}" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
+      local -a MUX=()
+      [ -n "$SSH_CONTROL_SOCKET" ] && MUX=(-o ControlMaster=auto -o ControlPath="${SSH_CONTROL_SOCKET}")
+      scp "${MUX[@]}" "${SIF_FILE}" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
       transfer_end=$(date +%s)
       transfer_time=$((transfer_end - transfer_start))
 

@@ -4,7 +4,7 @@ FROM ubuntu:24.04
 
 LABEL maintainer="Matthew Son"
 LABEL description="HPC container: Neovim + Python 3.13 + uv"
-LABEL version="0.6"
+LABEL version="0.7"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/New_York
@@ -86,6 +86,10 @@ RUN apt-get update && \
     unar \
     # Terminfo (ghostty + many others) for SSH terminal compatibility
     ncurses-term \
+    # clear command
+    ncurses-bin \
+    # process viewer
+    htop \
     # Bootstrap node — replaced by NodeSource LTS in Stage 2
     nodejs \
     npm \
@@ -104,6 +108,7 @@ RUN apt-get update && \
     tmux \
     zsh && \
     locale-gen en_US.UTF-8 && \
+    usermod -s /bin/zsh root && \
     rm -rf /var/lib/apt/lists/*
 
 # Note: ghostty terminfo is not shipped here. ghostty generates it from Zig
@@ -230,7 +235,7 @@ RUN ZELLIJ_VERSION=$(curl -s https://api.github.com/repos/zellij-org/zellij/rele
     chmod +x /usr/local/bin/zellij && \
     rm /tmp/zellij.tar.gz
 
-# ─── Stage 10: GitHub CLI + Copilot extension ───────────────────────────────
+# ─── Stage 10: GitHub CLI ────────────────────────────────────────────────────
 RUN mkdir -p -m 755 /etc/apt/keyrings && \
     wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null && \
@@ -241,8 +246,27 @@ RUN mkdir -p -m 755 /etc/apt/keyrings && \
     apt-get install -y gh && \
     rm -rf /var/lib/apt/lists/*
 
-# ─── Stage 11: Claude Code CLI (global npm install) ─────────────────────────
-RUN npm install -g @anthropic-ai/claude-code
+# ─── Stage 10b: GitHub Copilot CLI extension ─────────────────────────────────
+# Install to /usr/local/share/gh so the extension survives the Singularity
+# runtime bind-mount that shadows /home/gson with the host home directory.
+# Direct binary download avoids `gh auth login` requirement at build time.
+ENV GH_DATA_DIR=/usr/local/share/gh
+RUN GH_COPILOT_VERSION=$(curl -s https://api.github.com/repos/github/gh-copilot/releases/latest \
+        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/') && \
+    echo "Installing gh-copilot extension ${GH_COPILOT_VERSION}" && \
+    mkdir -p /usr/local/share/gh/extensions/gh-copilot && \
+    curl -L "https://github.com/github/gh-copilot/releases/download/${GH_COPILOT_VERSION}/linux-amd64" \
+        -o /usr/local/share/gh/extensions/gh-copilot/gh-copilot && \
+    chmod +x /usr/local/share/gh/extensions/gh-copilot/gh-copilot && \
+    chmod -R 755 /usr/local/share/gh
+
+# ─── Stage 11: Claude Code + tree-sitter CLI (global npm installs) ──────────
+# tree-sitter-cli is required by Neovim's nvim-treesitter plugin to compile
+# language parsers; without it nvim prints "tree-sitter CLI not installed".
+RUN npm install -g @anthropic-ai/claude-code tree-sitter-cli
+
+# ─── Stage 11b: Starship prompt ──────────────────────────────────────────────
+RUN curl -sS https://starship.rs/install.sh | sh -s -- --yes
 
 # ─── Stage 12: Build-time user (default UID/GID; runtime UID comes from host) ─
 # At HPC runtime Singularity uses the host user's UID/GID/groups, so the
@@ -270,12 +294,52 @@ ENV XDG_CACHE_HOME=/home/gson/.cache
 # at runtime and overwrites the image's copy.
 RUN ln -sf "$(which fdfind)" /usr/local/bin/fd 2>/dev/null || true && \
     mkdir -p /etc/zsh && \
-    cat >> /etc/zsh/zshrc << 'EOF'
+    cat > /etc/zsh/zshenv << 'EOF'
+# ──────────────────────────────────────────────────────────────────────────────
+# /etc/zsh/zshenv — sourced by EVERY zsh invocation (login, interactive,
+# non-interactive `zsh -c`, scripts).  We keep environment exports here so that
+# zellij/yazi/scp/tmux/etc. that spawn `zsh -c '…'` inherit the right env.
+# Aliases and interactive integrations go in /etc/zsh/zshrc.
+# ──────────────────────────────────────────────────────────────────────────────
 
-# ── container aliases ────────────────────────────────────────────────────────
-export PATH="$HOME/.local/bin:$PATH"
+# ── container PATH (prepend so container binaries win over host copies) ──────
+# Singularity inherits the host PATH; be explicit so /usr/local/bin tools
+# (nvim, starship, lazygit, uv, …) are always found.
+export PATH="/usr/local/bin:/usr/local/cuda-12.3/bin:$HOME/.local/bin:$PATH"
+
+# ── Make zsh the default for child shells (zellij, tmux, scripts) ────────────
+# CIRCE's /etc/passwd sets login shell to bash, which is inherited via the
+# bind-mounted home.  Force SHELL=zsh inside the container so zellij and
+# other terminal multiplexers spawn zsh panes by default.
+export SHELL=/bin/zsh
+
+# ── XDG base dirs: use runtime $HOME, not the build-time /home/gson path ─────
+# The Dockerfile ENV hardcodes /home/gson/.*, but Singularity bind-mounts the
+# real user home (e.g. /home/g/gson) at runtime, making those paths wrong.
+export XDG_CONFIG_HOME="${HOME}/.config"
+export XDG_DATA_HOME="${HOME}/.local/share"
+export XDG_STATE_HOME="${HOME}/.local/state"
+
+# ── Neovim XDG cache on node-local /tmp ──────────────────────────────────────
+# BGFS/NFS home dirs cause extremely slow nvim startup because the Lua
+# bytecode cache (luac/) and tree-sitter parser cache live in XDG_CACHE_HOME.
+# Redirecting to /tmp (local disk) keeps the cache fast.
+export XDG_CACHE_HOME="/tmp/${USER}/.cache"
+mkdir -p "${XDG_CACHE_HOME}/nvim" 2>/dev/null
+
+# ── Default editor (yazi uses $EDITOR / $VISUAL to open files) ───────────────
+export EDITOR=nvim
+export VISUAL=nvim
+EOF
+RUN cat >> /etc/zsh/zshrc << 'EOF'
+
+# ── container aliases (interactive only) ─────────────────────────────────────
 alias vi="nvim"
 alias vim="nvim"
+
+# ── shell integrations (interactive only) ────────────────────────────────────
+eval "$(zoxide init zsh)"
+eval "$(starship init zsh)"
 EOF
 
 CMD ["/bin/zsh"]

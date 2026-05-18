@@ -6,8 +6,9 @@
 #   ./connect_nvim.sh          # auto-find job and connect
 #   ./connect_nvim.sh <node>   # connect directly to a known node
 #
-# On first connect:  creates a Zellij session named 'nvim' (run `nvim` inside)
-# On reconnect:      re-attaches to the existing session with your state intact
+# Drops into an interactive zsh inside the Singularity container.
+# Start zellij/nvim manually from there if you want a persistent layout:
+#   zellij attach nvim 2>/dev/null || zellij --session nvim
 #
 # Requires:
 #   ~/.ssh/config entry for Host circe with IdentityFile ~/.ssh/circe_key
@@ -44,12 +45,12 @@ else
 fi
 
 echo "Connecting to container on $NODE ..."
-echo "(First time: run 'nvim' inside the Zellij session)"
+echo "(Inside the container, start zellij manually if you want: zellij --session nvim)"
 echo ""
 
 # ─── Capture local terminal dimensions ───────────────────────────────────────
-# singularity exec doesn't forward TIOCGWINSZ, so Zellij sees the wrong size.
-# We read dimensions here and apply them inside via stty.
+# singularity exec doesn't forward TIOCGWINSZ, so the terminal sees the wrong
+# size.  We read dimensions here and apply them inside via stty.
 COLS=$(tput cols 2>/dev/null || echo 220)
 ROWS=$(tput lines 2>/dev/null || echo 50)
 
@@ -57,6 +58,9 @@ ROWS=$(tput lines 2>/dev/null || echo 50)
 # Uses the compute node's native SSH (no container sshd needed).
 # Uses absolute path to singularity binary — module system not available in
 # non-login SSH exec sessions.
+# Drops into interactive zsh (`-i`) so /etc/zsh/zshrc is sourced (aliases,
+# starship, zoxide).  /etc/zsh/zshenv (PATH, XDG_*, EDITOR, SHELL) is sourced
+# unconditionally.  No zellij is launched — start it yourself if desired.
 SINGULARITY=/apps/singularity/3.5.3/bin/singularity
 ssh \
     -J "$LOGIN_ALIAS" \
@@ -64,7 +68,6 @@ ssh \
     "$REMOTE_USER@$NODE" \
     "TERM=xterm-256color COLUMNS=$COLS LINES=$ROWS \
      $SINGULARITY exec instance://$INSTANCE \
-     zsh -c 'stty cols $COLS rows $ROWS 2>/dev/null; \
-             zellij attach nvim 2>/dev/null || zellij --session nvim'; \
+     zsh -i -c 'stty cols $COLS rows $ROWS 2>/dev/null; exec zsh -i'; \
      echo ''; echo '--- exited container --- (type exit to disconnect)'; \
      exec \$SHELL -l"

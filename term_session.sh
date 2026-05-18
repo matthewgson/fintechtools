@@ -29,30 +29,30 @@ LOGIN_NODE="circe.rc.usf.edu"
 # Set up cleanup function for graceful shutdown
 export GID=$$
 cleanup() {
-    echo "Performing cleanup operations..."
+  echo "Performing cleanup operations..."
 
-    # Stop the Singularity instance with retries
-    echo "Stopping Singularity container..."
-    for i in {1..3}; do
-        if singularity instance list | grep -q "$INSTANCE"; then
-            singularity instance stop "$INSTANCE" 2>/dev/null
-            sleep 2
-        else
-            echo "Container instance stopped successfully"
-            break
-        fi
-        if [ $i -eq 3 ]; then
-            echo "Warning: Container may still be running"
-        fi
-    done
+  # Stop the Singularity instance with retries
+  echo "Stopping Singularity container..."
+  for i in {1..3}; do
+    if singularity instance list | grep -q "$INSTANCE"; then
+      singularity instance stop "$INSTANCE" 2>/dev/null
+      sleep 2
+    else
+      echo "Container instance stopped successfully"
+      break
+    fi
+    if [ $i -eq 3 ]; then
+      echo "Warning: Container may still be running"
+    fi
+  done
 
-    # Kill the process group
-    kill -SIGINT -$GID 2>/dev/null
+  # Kill the process group
+  kill -SIGINT -$GID 2>/dev/null
 
-    # Cancel the SLURM job
-    scancel $SLURM_JOB_ID 2>/dev/null
+  # Cancel the SLURM job
+  scancel $SLURM_JOB_ID 2>/dev/null
 
-    echo "Cleanup completed"
+  echo "Cleanup completed"
 }
 # Register cleanup function to run on script exit
 trap cleanup EXIT
@@ -74,31 +74,31 @@ echo "Start Time: $START_TIME"
 echo "Compute Node: $COMPUTE_NODE"
 echo "Node IP: $NODE_IP"
 echo "Container: fintech-tools.sif (v0.6 - CPU only)"
-echo "Connect: ssh -J gson@$LOGIN_NODE -t gson@$COMPUTE_NODE '/apps/singularity/3.5.3/bin/singularity exec instance://$INSTANCE bash -c \"zellij attach nvim 2>/dev/null || zellij --session nvim\"'"
+echo "Connect: ssh -J gson@$LOGIN_NODE -t gson@$COMPUTE_NODE '/apps/singularity/3.5.3/bin/singularity exec instance://$INSTANCE zsh -i'"
 echo "========================================="
 
 # Verify SIF exists
 if [ ! -f "$SIF" ]; then
-    echo "❌ ERROR: Container not found at $SIF"
-    exit 1
+  echo "❌ ERROR: Container not found at $SIF"
+  exit 1
 fi
 
 # Check for existing container instance and clean up if necessary
 echo "Checking for existing container instances..."
 if singularity instance list | grep -q "$INSTANCE"; then
-    echo "Found existing container instance. Stopping it..."
-    singularity instance stop "$INSTANCE"
-    sleep 3
+  echo "Found existing container instance. Stopping it..."
+  singularity instance stop "$INSTANCE"
+  sleep 3
 fi
 
 echo "Starting Singularity container..."
 singularity instance start \
-    --no-home \
-    --bind /work_bgfs/g/$USER:/work_bgfs/g/$USER \
-    --bind /home/g/$USER:/home/$USER \
-    --bind /shares:/shares \
-    "$SIF" \
-    "$INSTANCE"
+  --no-home \
+  --bind /work_bgfs/g/$USER:/work_bgfs/g/$USER \
+  --bind /home/g/$USER:/home/$USER \
+  --bind /shares:/shares \
+  "$SIF" \
+  "$INSTANCE"
 
 # Allow container to fully initialize
 echo "Waiting for container to initialize..."
@@ -106,9 +106,9 @@ sleep 5
 
 # Verify container started successfully
 if ! singularity instance list | grep -q "$INSTANCE"; then
-    echo "❌ ERROR: Container failed to start properly"
-    singularity instance list
-    exit 1
+  echo "❌ ERROR: Container failed to start properly"
+  singularity instance list
+  exit 1
 fi
 echo "✓ Container instance started successfully"
 
@@ -120,11 +120,11 @@ echo "   ./connect_nvim.sh"
 echo ""
 echo " Or manually:"
 echo "   ssh -J gson@$LOGIN_NODE -t gson@$COMPUTE_NODE \\"
-echo "     '/apps/singularity/3.5.3/bin/singularity exec instance://$INSTANCE \\"
-echo "      bash -c \"zellij attach nvim 2>/dev/null || zellij --session nvim\"'"
+echo "     '/apps/singularity/3.5.3/bin/singularity exec instance://$INSTANCE zsh -i'"
 echo ""
-echo " Your Zellij session 'nvim' persists inside the container."
-echo " Disconnect and reconnect as many times as you like."
+echo " The container instance persists; reconnect freely from another shell."
+echo " To use zellij for persistent panes, run inside the container:"
+echo "   zellij attach nvim 2>/dev/null || zellij --session nvim"
 echo " Session ends when job $SLURM_JOB_ID is cancelled or times out."
 echo "========================================="
 
