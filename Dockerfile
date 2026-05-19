@@ -72,7 +72,6 @@ RUN apt-get update && \
     # Neovim / LazyVim CLI deps
     ripgrep \
     fd-find \
-    fzf \
     unzip \
     # Yazi required + recommended optional deps (per yazi-rs.github.io/docs/installation)
     file \
@@ -82,7 +81,6 @@ RUN apt-get update && \
     poppler-utils \
     imagemagick \
     xclip \
-    zoxide \
     unar \
     # Terminfo (ghostty + many others) for SSH terminal compatibility
     ncurses-term \
@@ -141,8 +139,8 @@ RUN curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu22
 ENV PATH="/usr/local/cuda-12.3/bin:$PATH"
 ENV LD_LIBRARY_PATH="/usr/local/cuda-12.3/lib64:/.singularity.d/libs:$LD_LIBRARY_PATH"
 
-# ─── Stage 2: Node.js 20 LTS (for Mason / LSP servers) ──────────────────────
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+# ─── Stage 2: Node.js 24 LTS (for Mason / LSP servers) ──────────────────────
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*
 
@@ -225,6 +223,28 @@ RUN RESVG_VERSION=$(curl -s https://api.github.com/repos/linebender/resvg/releas
     chmod +x /usr/local/bin/resvg && \
     rm /tmp/resvg.tar.gz
 
+# ─── Stage 8c: fzf + zoxide (latest from GitHub) ────────────────────────────
+# Install from GitHub releases instead of apt to guarantee the latest versions.
+# Yazi's `z` interactive jump (zoxide --interactive → fzf) requires up-to-date
+# binaries; the apt packages on Ubuntu 24.04 are ~2023 builds which can cause
+# silent failures with newer yazi builds.
+RUN FZF_VERSION=$(curl -s https://api.github.com/repos/junegunn/fzf/releases/latest \
+        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"v\?\([^"]*\)".*/\1/') && \
+    echo "Installing fzf ${FZF_VERSION}" && \
+    curl -L "https://github.com/junegunn/fzf/releases/download/v${FZF_VERSION}/fzf-${FZF_VERSION}-linux_amd64.tar.gz" \
+        -o /tmp/fzf.tar.gz && \
+    tar -C /usr/local/bin -xzf /tmp/fzf.tar.gz fzf && \
+    chmod +x /usr/local/bin/fzf && \
+    rm /tmp/fzf.tar.gz
+RUN ZOXIDE_VERSION=$(curl -s https://api.github.com/repos/ajeetdsouza/zoxide/releases/latest \
+        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"v\?\([^"]*\)".*/\1/') && \
+    echo "Installing zoxide ${ZOXIDE_VERSION}" && \
+    curl -L "https://github.com/ajeetdsouza/zoxide/releases/download/v${ZOXIDE_VERSION}/zoxide-${ZOXIDE_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+        -o /tmp/zoxide.tar.gz && \
+    tar -C /usr/local/bin -xzf /tmp/zoxide.tar.gz zoxide && \
+    chmod +x /usr/local/bin/zoxide && \
+    rm /tmp/zoxide.tar.gz
+
 # ─── Stage 9: Zellij (terminal multiplexer) ─────────────────────────────────
 RUN ZELLIJ_VERSION=$(curl -s https://api.github.com/repos/zellij-org/zellij/releases/latest \
         | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"v\([^"]*\)".*/\1/') && \
@@ -259,6 +279,49 @@ RUN GH_COPILOT_VERSION=$(curl -s https://api.github.com/repos/github/gh-copilot/
         -o /usr/local/share/gh/extensions/gh-copilot/gh-copilot && \
     chmod +x /usr/local/share/gh/extensions/gh-copilot/gh-copilot && \
     chmod -R 755 /usr/local/share/gh
+
+# ─── Stage 10c: SLURM client passthrough (host-binary binding) ──────────────
+# The HPC cluster runs RHEL 7 with an old SLURM whose RPC protocol is not
+# compatible with anything we could install via apt.  Instead, the launcher
+# scripts (term_session.sh / dev_session.sh) bind-mount the host's SLURM
+# binaries and their direct library deps into the locations created below.
+#
+# Layout at runtime:
+#   /opt/host-slurm/bin/{squeue,sacct,…}  ← host /usr/bin/<cmd>
+#   /opt/host-slurm/lib/<basename>.so     ← host libslurm*, libmunge*, plugins' deps
+#   /usr/lib64/slurm/                     ← host plugin dir (path is absolute
+#                                            in slurm.conf, so we mirror it)
+#   /etc/slurm[-llnl]/slurm.conf          ← cluster config
+#   /run/munge, /var/run/munge            ← munge auth socket
+#
+# Wrappers in /usr/local/bin/<cmd> exec the bound host binary with a SCOPED
+# LD_LIBRARY_PATH so RHEL 7 libs (libslurm, libmunge) are used ONLY for
+# these commands, never leaking to the rest of the container's newer glibc.
+# The host binary's hard-coded PT_INTERP (/lib64/ld-linux-x86-64.so.2) is
+# resolved against the container's Ubuntu ld.so + libc, which is
+# forward-compatible with RHEL 7 binaries.
+RUN mkdir -p /opt/host-slurm/bin /opt/host-slurm/lib \
+             /usr/lib64/slurm \
+             /etc/slurm /etc/slurm-llnl \
+             /run/munge /var/run/munge /var/spool/slurm && \
+    useradd -r -M -s /sbin/nologin slurm 2>/dev/null || true && \
+    for cmd in squeue sacct sbatch srun sinfo scancel scontrol salloc \
+               sstat sprio sshare sreport sacctmgr sbcast sdiag sattach \
+               sgather sview sinfo sjstat; do \
+        printf '%s\n' \
+            '#!/bin/sh' \
+            '# Auto-generated wrapper: exec host SLURM binary with scoped LD_LIBRARY_PATH.' \
+            'cmd="${0##*/}"' \
+            'if [ ! -x "/opt/host-slurm/bin/${cmd}" ]; then' \
+            '    echo "${cmd}: host SLURM binary not bound at /opt/host-slurm/bin/${cmd}." >&2' \
+            '    echo "Did the launcher script run on a node with SLURM installed?" >&2' \
+            '    exit 127' \
+            'fi' \
+            'export LD_LIBRARY_PATH="/opt/host-slurm/lib:/usr/lib64/slurm:${LD_LIBRARY_PATH}"' \
+            'exec "/opt/host-slurm/bin/${cmd}" "$@"' \
+            > "/usr/local/bin/${cmd}" && \
+        chmod +x "/usr/local/bin/${cmd}"; \
+    done
 
 # ─── Stage 11: Claude Code + tree-sitter CLI (global npm installs) ──────────
 # tree-sitter-cli is required by Neovim's nvim-treesitter plugin to compile
@@ -327,9 +390,60 @@ export XDG_STATE_HOME="${HOME}/.local/state"
 export XDG_CACHE_HOME="/tmp/${USER}/.cache"
 mkdir -p "${XDG_CACHE_HOME}/nvim" 2>/dev/null
 
+# ── Neovim data/state on node-local /tmp via symlinks ────────────────────────
+# Quobyte/BeeGFS network home incurs ~1.2 ms per file × thousands of files
+# when nvim loads the LazyVim plugin tree (~3600 .lua files, 12k inodes),
+# producing multi-second cold starts.  Local ext3 /tmp is ~88× faster.
+# We symlink the two hot directories into /tmp/$USER while leaving
+# ~/.config/nvim on the network home (small, must persist, edited rarely).
+#
+# Trade-off: /tmp is node-local and may be wiped between SLURM allocations.
+# If the symlink target is missing, nvim will simply re-bootstrap plugins
+# on next launch (:Lazy sync, :MasonInstall).
+#
+# Safety: we only create the symlink when ~/.local/share/nvim (or state)
+# either does not exist or is already a symlink.  If a real directory with
+# content is present, we leave it untouched so existing data is not hidden;
+# migrate it manually with:
+#   mv ~/.local/share/nvim /tmp/${USER}/.local/share/nvim
+#   mv ~/.local/state/nvim /tmp/${USER}/.local/state/nvim
+for _nv_sub in share/nvim state/nvim; do
+    _nv_src="${HOME}/.local/${_nv_sub}"
+    _nv_dst="/tmp/${USER}/.local/${_nv_sub}"
+    mkdir -p "${_nv_dst}" 2>/dev/null
+    mkdir -p "$(dirname "${_nv_src}")" 2>/dev/null
+    if [ -L "${_nv_src}" ] || [ ! -e "${_nv_src}" ]; then
+        ln -sfn "${_nv_dst}" "${_nv_src}" 2>/dev/null
+    fi
+done
+unset _nv_sub _nv_src _nv_dst
+
 # ── Default editor (yazi uses $EDITOR / $VISUAL to open files) ───────────────
 export EDITOR=nvim
 export VISUAL=nvim
+
+# ── Terminal color capability ─────────────────────────────────────────────────
+# Declare 24-bit color support explicitly so tools like yazi, bat, and delta
+# do not need to query the terminal via DA1/XTVERSION escape sequences.
+# Without this, newer yazi probes the terminal at startup; the probe round-trips
+# through SSH + Singularity and times out, printing "Terminal response timeout".
+export COLORTERM=truecolor
+# Ensure TERM is explicit — Singularity sometimes clears it.
+: "${TERM:=xterm-256color}"
+export TERM
+
+# ── SLURM client config discovery ────────────────────────────────────────────
+# squeue/sacct/sbatch read $SLURM_CONF first.  Host clusters may put the
+# config at /etc/slurm/slurm.conf (modern) or /etc/slurm-llnl/slurm.conf
+# (older Debian/Ubuntu).  Both mount points are pre-created in the image
+# and bind-mounted (when present on the host) by the launcher scripts.
+if [ -z "${SLURM_CONF:-}" ]; then
+    if [ -f /etc/slurm/slurm.conf ]; then
+        export SLURM_CONF=/etc/slurm/slurm.conf
+    elif [ -f /etc/slurm-llnl/slurm.conf ]; then
+        export SLURM_CONF=/etc/slurm-llnl/slurm.conf
+    fi
+fi
 EOF
 RUN cat >> /etc/zsh/zshrc << 'EOF'
 
@@ -337,9 +451,33 @@ RUN cat >> /etc/zsh/zshrc << 'EOF'
 alias vi="nvim"
 alias vim="nvim"
 
+# ── yazi shell wrapper ────────────────────────────────────────────────────────
+# Official wrapper from yazi-rs.github.io/docs/quick-start.
+# Use `y` instead of `yazi` so the shell follows yazi's working directory
+# on exit, AND so the `z` key (zoxide --interactive → fzf) gets proper
+# terminal handoff inside the multiplexer.
+function y() {
+    local tmp cwd
+    tmp="$(mktemp -t "yazi-cwd.XXXXXX")"
+    yazi "$@" --cwd-file="$tmp"
+    if cwd="$(command cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
+        builtin cd -- "$cwd"
+    fi
+    rm -f -- "$tmp"
+}
+
 # ── shell integrations (interactive only) ────────────────────────────────────
 eval "$(zoxide init zsh)"
+eval "$(fzf --zsh)"
 eval "$(starship init zsh)"
+
+# ── fzf appearance and file-picker defaults ──────────────────────────────────
+# These apply to Ctrl-R (history), Ctrl-T (files), Alt-C (cd), and yazi's
+# internal fzf calls (the Z key / zoxide --interactive).
+export FZF_DEFAULT_OPTS='--height=40% --layout=reverse --border --info=inline'
+export FZF_DEFAULT_COMMAND='fd --type f --hidden --follow --exclude .git'
+export FZF_CTRL_T_COMMAND="${FZF_DEFAULT_COMMAND}"
+export FZF_ALT_C_COMMAND='fd --type d --hidden --follow --exclude .git'
 EOF
 
 CMD ["/bin/zsh"]

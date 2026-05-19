@@ -188,10 +188,10 @@ setup_ssh_mux() {
   SSH_CONTROL_SOCKET="$(mktemp -u /tmp/circe_mux_XXXXXX)"
   print_status "Opening SSH connection to ${REMOTE_HOST} (enter password once for all transfers)..."
   if ssh -fNM \
-       -o ControlMaster=yes \
-       -o ControlPath="${SSH_CONTROL_SOCKET}" \
-       -o ControlPersist=30m \
-       "${REMOTE_USER}@${REMOTE_HOST}"; then
+    -o ControlMaster=yes \
+    -o ControlPath="${SSH_CONTROL_SOCKET}" \
+    -o ControlPersist=30m \
+    "${REMOTE_USER}@${REMOTE_HOST}"; then
     print_success "✓ SSH connection established (multiplexed)"
   else
     print_warning "SSH multiplexing unavailable — transfers will prompt individually"
@@ -508,68 +508,66 @@ offer_transfer_configs() {
   local SCRIPT_DIR
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   local ZSHRC_LOCAL="${SCRIPT_DIR}/.zshrc"
+  local -a MUX=()
+  [ -n "$SSH_CONTROL_SOCKET" ] && MUX=(-o ControlMaster=auto -o ControlPath="${SSH_CONTROL_SOCKET}")
 
+  # ── Config folders (optional) ───────────────────────────────────────────────
   echo
   print_status "Sync ~/.config folders + .zshrc to CIRCE"
   read -r -p "Sync config folders (nvim, starship, yazi, zellij, etc.) to ${REMOTE_USER}@${REMOTE_HOST}? (y/N): " REPLY </dev/tty
   echo
 
-  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    print_status "Skipping config sync"
-    return 0
-  fi
+  if [[ $REPLY =~ ^[Yy]$ ]]; then
+    # Rsync selected ~/.config sub-directories to remote ~/.config/
+    # starship is intentionally excluded: run once inside the container on CIRCE:
+    #   starship preset nerd-font-symbols -o ~/.config/starship.toml
+    local CONFIGS=(
+      avante.nvim
+      github-copilot
+      htop
+      nvim
+      yazi
+      zellij
+    )
 
-  # Rsync selected ~/.config sub-directories to remote ~/.config/
-  # starship is intentionally excluded: run once inside the container on CIRCE:
-  #   starship preset nerd-font-symbols -o ~/.config/starship.toml
-  local CONFIGS=(
-    avante.nvim
-    git
-    github-copilot
-    htop
-    nvim
-    yazi
-    zellij
-  )
+    print_status "Syncing ~/.config folders to ${REMOTE_USER}@${REMOTE_HOST}:~/.config/ ..."
+    local rsync_sources=()
+    for cfg in "${CONFIGS[@]}"; do
+      local src="$HOME/.config/$cfg"
+      if [ -e "$src" ]; then
+        rsync_sources+=("$src")
+      else
+        print_warning "  Skipping missing: ~/.config/$cfg"
+      fi
+    done
 
-  print_status "Syncing ~/.config folders to ${REMOTE_USER}@${REMOTE_HOST}:~/.config/ ..."
-  local rsync_sources=()
-  for cfg in "${CONFIGS[@]}"; do
-    local src="$HOME/.config/$cfg"
-    if [ -e "$src" ]; then
-      rsync_sources+=("$src")
-    else
-      print_warning "  Skipping missing: ~/.config/$cfg"
-    fi
-  done
+    if [ ${#rsync_sources[@]} -gt 0 ]; then
+      local SSH_E="ssh"
+      [ -n "$SSH_CONTROL_SOCKET" ] && SSH_E="ssh -o ControlMaster=auto -o ControlPath=${SSH_CONTROL_SOCKET}"
 
-  if [ ${#rsync_sources[@]} -gt 0 ]; then
-    local -a MUX=()
-    [ -n "$SSH_CONTROL_SOCKET" ] && MUX=(-o ControlMaster=auto -o ControlPath="${SSH_CONTROL_SOCKET}")
-    local SSH_E="ssh"
-    [ -n "$SSH_CONTROL_SOCKET" ] && SSH_E="ssh -o ControlMaster=auto -o ControlPath=${SSH_CONTROL_SOCKET}"
-
-    # Pre-create remote ~/.config so openrsync (macOS) works without --mkpath
-    ssh "${MUX[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p ~/.config" 2>/dev/null
-    if rsync -avz -e "$SSH_E" "${rsync_sources[@]}" \
+      # Pre-create remote ~/.config so openrsync (macOS) works without --mkpath
+      ssh "${MUX[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p ~/.config" 2>/dev/null
+      if rsync -avz -e "$SSH_E" "${rsync_sources[@]}" \
         "${REMOTE_USER}@${REMOTE_HOST}:~/.config/"; then
-      print_success "✓ Config folders synced successfully"
-      print_status "Starship not copied — run once inside the container on CIRCE to set up:"
-      echo "    starship preset nerd-font-symbols -o ~/.config/starship.toml"
-    else
-      print_error "Failed to sync config folders"
+        print_success "✓ Config folders synced successfully"
+        print_status "Starship not copied — run once inside the container on CIRCE to set up:"
+        echo "    starship preset nerd-font-symbols -o ~/.config/starship.toml"
+      else
+        print_error "Failed to sync config folders"
+      fi
     fi
+  else
+    print_status "Skipping config folder sync"
   fi
 
-  # Transfer .zshrc
+  # ── .zshrc (always offered) ──────────────────────────────────────────────────
   if [ ! -f "$ZSHRC_LOCAL" ]; then
     print_warning ".zshrc not found at ${ZSHRC_LOCAL} — skipping"
     return 0
   fi
 
-  print_status "Transferring .zshrc to ${REMOTE_USER}@${REMOTE_HOST}:~/.zshrc ..."
-  local -a MUX=()
-  [ -n "$SSH_CONTROL_SOCKET" ] && MUX=(-o ControlMaster=auto -o ControlPath="${SSH_CONTROL_SOCKET}")
+  echo
+  print_status "Transfer .zshrc to CIRCE"
   if ssh "${MUX[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "[ -f ~/.zshrc ]" 2>/dev/null; then
     print_warning "~/.zshrc already exists on ${REMOTE_HOST}!"
     read -r -p "Overwrite ~/.zshrc on CIRCE? (y/N): " OVERWRITE_REPLY </dev/tty
@@ -580,47 +578,8 @@ offer_transfer_configs() {
     fi
   fi
 
+  print_status "Transferring .zshrc to ${REMOTE_USER}@${REMOTE_HOST}:~/.zshrc ..."
   if scp "${MUX[@]}" "$ZSHRC_LOCAL" "${REMOTE_USER}@${REMOTE_HOST}:~/.zshrc"; then
-    print_success "✓ .zshrc transferred to CIRCE"
-  else
-    print_error "Failed to transfer .zshrc"
-  fi
-}
-
-# Transfer .zshrc to HPC
-offer_transfer_zshrc() {
-  local SCRIPT_DIR
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  local ZSHRC_LOCAL="${SCRIPT_DIR}/.zshrc"
-
-  if [ ! -f "$ZSHRC_LOCAL" ]; then
-    print_warning ".zshrc not found at ${ZSHRC_LOCAL} — skipping transfer"
-    return 0
-  fi
-
-  echo
-  print_status "Transfer .zshrc to CIRCE"
-  read -r -p "Transfer .zshrc to ${REMOTE_USER}@${REMOTE_HOST}:~/.zshrc? (y/N): " REPLY </dev/tty
-  echo
-
-  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    print_status "Skipping .zshrc transfer"
-    return 0
-  fi
-
-  # Warn before overwrite
-  if ssh "${REMOTE_USER}@${REMOTE_HOST}" "[ -f ~/.zshrc ]" 2>/dev/null; then
-    print_warning "~/.zshrc already exists on ${REMOTE_HOST}!"
-    read -r -p "Overwrite ~/.zshrc on CIRCE? (y/N): " OVERWRITE_REPLY </dev/tty
-    echo
-    if [[ ! $OVERWRITE_REPLY =~ ^[Yy]$ ]]; then
-      print_status "Skipping .zshrc transfer — file NOT overwritten"
-      return 0
-    fi
-  fi
-
-  print_status "Transferring .zshrc to ${REMOTE_USER}@${REMOTE_HOST}..."
-  if scp "$ZSHRC_LOCAL" "${REMOTE_USER}@${REMOTE_HOST}:~/.zshrc"; then
     print_success "✓ .zshrc transferred to CIRCE"
   else
     print_error "Failed to transfer .zshrc"

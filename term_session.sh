@@ -3,13 +3,14 @@
 #SBATCH --output=/home/g/gson/sh_log/nvim_session.log
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=128
 #SBATCH --partition=muma_2021
 #SBATCH --qos=muma21
-#SBATCH --mem=32gb
+#SBATCH --mem=1007gb
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=gson@usf.edu
 #SBATCH --time=168:00:00
+#SBATCH --nodelist=mdc-1057-13-13
 
 # Lightweight CPU-only Neovim dev session. Mirrors dev_session.sh structure
 # but drops GPU request, CUDA module load, and /apps/cuda bind so the job
@@ -92,11 +93,57 @@ if singularity instance list | grep -q "$INSTANCE"; then
 fi
 
 echo "Starting Singularity container..."
+
+# ─── SLURM client passthrough (host-binary binding) ──────────────────────────
+# Cluster runs RHEL 7 + old SLURM; bind host binaries + their lib deps into
+# /opt/host-slurm/ — wrapper scripts baked into the image at /usr/local/bin/
+# exec them with a scoped LD_LIBRARY_PATH.
+SLURM_BIND_ARGS=()
+for _hp in /etc/slurm /etc/slurm-llnl /run/munge /var/run/munge /var/spool/slurm; do
+  [ -d "$_hp" ] && SLURM_BIND_ARGS+=(--bind "$_hp:$_hp")
+done
+for _hp in /usr/lib64/slurm /usr/lib/slurm; do
+  if [ -d "$_hp" ]; then
+    SLURM_BIND_ARGS+=(--bind "$_hp:$_hp")
+    break
+  fi
+done
+_found_bins=()
+# Try PATH first, then well-known RHEL 7 SLURM install locations.
+# (sbatch compute jobs often don't inherit the SLURM bin dir in PATH.)
+_slurm_bin_dirs=(/usr/bin /usr/local/bin /opt/slurm/bin /opt/slurm-llnl/bin)
+for _cmd in squeue sacct sbatch srun sinfo scancel scontrol salloc \
+  sstat sprio sshare sreport sacctmgr sbcast sdiag sattach \
+  sgather sview sjstat; do
+  _bin=$(command -v "$_cmd" 2>/dev/null) || true
+  if [ -z "$_bin" ]; then
+    for _dir in "${_slurm_bin_dirs[@]}"; do
+      [ -x "$_dir/$_cmd" ] && _bin="$_dir/$_cmd" && break
+    done
+  fi
+  [ -n "$_bin" ] && [ -x "$_bin" ] || continue
+  SLURM_BIND_ARGS+=(--bind "$_bin:/opt/host-slurm/bin/$_cmd")
+  _found_bins+=("$_bin")
+done
+[ ${#_found_bins[@]} -eq 0 ] &&
+  echo "⚠  No SLURM binaries found on host PATH or in ${_slurm_bin_dirs[*]}; sacct/squeue will not work inside container." >&2
+declare -A _seen
+for _entry in "${_found_bins[@]}"; do
+  while IFS= read -r _lib; do
+    [ -f "$_lib" ] && [ -z "${_seen[$_lib]:-}" ] || continue
+    _seen[$_lib]=1
+    SLURM_BIND_ARGS+=(--bind "$_lib:/opt/host-slurm/lib/${_lib##*/}")
+  done < <(ldd "$_entry" 2>/dev/null | awk '/=> \//{print $3}' |
+    grep -E 'lib(slurm|munge|hwloc|numa|lua|pmi|pmix|json-c|yaml|jwt|jansson|hdf5|cgroup|systemd|cap)')
+done
+unset _hp _cmd _bin _dir _slurm_bin_dirs _found_bins _seen _entry _lib
+
 singularity instance start \
   --no-home \
   --bind /work_bgfs/g/$USER:/work_bgfs/g/$USER \
   --bind /home/g/$USER:/home/$USER \
   --bind /shares:/shares \
+  "${SLURM_BIND_ARGS[@]}" \
   "$SIF" \
   "$INSTANCE"
 

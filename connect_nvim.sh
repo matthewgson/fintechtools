@@ -68,6 +68,4 @@ ssh \
     "$REMOTE_USER@$NODE" \
     "TERM=xterm-256color COLUMNS=$COLS LINES=$ROWS \
      $SINGULARITY exec instance://$INSTANCE \
-     zsh -i -c 'stty cols $COLS rows $ROWS 2>/dev/null; exec zsh -i'; \
-     echo ''; echo '--- exited container --- (type exit to disconnect)'; \
-     exec \$SHELL -l"
+     zsh -i -c 'stty cols $COLS rows $ROWS 2>/dev/null; exec zsh -i'"

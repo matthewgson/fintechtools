@@ -98,6 +98,47 @@ if singularity instance list | grep -q fintech_ssh_container; then
 fi
 
 echo "Starting Singularity container with GPU and SSH support..."
+
+# ─── SLURM client passthrough (host-binary binding) ──────────────────────────
+# Cluster runs RHEL 7 + old SLURM; bind host binaries + their lib deps into
+# /opt/host-slurm/ — wrapper scripts baked into the image at /usr/local/bin/
+# exec them with a scoped LD_LIBRARY_PATH.
+SLURM_BIND_ARGS=()
+for _hp in /etc/slurm /etc/slurm-llnl /run/munge /var/run/munge /var/spool/slurm; do
+  [ -d "$_hp" ] && SLURM_BIND_ARGS+=( --bind "$_hp:$_hp" )
+done
+for _hp in /usr/lib64/slurm /usr/lib/slurm; do
+  if [ -d "$_hp" ]; then SLURM_BIND_ARGS+=( --bind "$_hp:$_hp" ); break; fi
+done
+_found_bins=()
+# Try PATH first, then well-known RHEL 7 SLURM install locations.
+# (sbatch compute jobs often don't inherit the SLURM bin dir in PATH.)
+_slurm_bin_dirs=( /usr/bin /usr/local/bin /opt/slurm/bin /opt/slurm-llnl/bin )
+for _cmd in squeue sacct sbatch srun sinfo scancel scontrol salloc \
+            sstat sprio sshare sreport sacctmgr sbcast sdiag sattach \
+            sgather sview sjstat; do
+  _bin=$(command -v "$_cmd" 2>/dev/null) || true
+  if [ -z "$_bin" ]; then
+    for _dir in "${_slurm_bin_dirs[@]}"; do
+      [ -x "$_dir/$_cmd" ] && _bin="$_dir/$_cmd" && break
+    done
+  fi
+  [ -n "$_bin" ] && [ -x "$_bin" ] || continue
+  SLURM_BIND_ARGS+=( --bind "$_bin:/opt/host-slurm/bin/$_cmd" )
+  _found_bins+=( "$_bin" )
+done
+[ ${#_found_bins[@]} -eq 0 ] && \
+  echo "⚠  No SLURM binaries found on host PATH or in ${_slurm_bin_dirs[*]}; sacct/squeue will not work inside container." >&2
+declare -A _seen
+for _entry in "${_found_bins[@]}"; do
+  while IFS= read -r _lib; do
+    [ -f "$_lib" ] && [ -z "${_seen[$_lib]:-}" ] || continue
+    _seen[$_lib]=1; SLURM_BIND_ARGS+=( --bind "$_lib:/opt/host-slurm/lib/${_lib##*/}" )
+  done < <(ldd "$_entry" 2>/dev/null | awk '/=> \//{print $3}' | \
+           grep -E 'lib(slurm|munge|hwloc|numa|lua|pmi|pmix|json-c|yaml|jwt|jansson|hdf5|cgroup|systemd|cap)')
+done
+unset _hp _cmd _bin _dir _slurm_bin_dirs _found_bins _seen _entry _lib
+
 singularity instance start \
     --nv \
     --no-home \
@@ -106,6 +147,7 @@ singularity instance start \
     --bind /shares:/shares \
     --bind /home/g/gson/ssh_keys:/etc/ssh \
     --bind /apps/cuda/12.3:/apps/cuda/12.3 \
+    "${SLURM_BIND_ARGS[@]}" \
     /home/g/$USER/containers/fintech-tools.sif \
     fintech_ssh_container
 
