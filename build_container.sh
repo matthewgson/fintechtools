@@ -7,7 +7,7 @@ set -e # Exit on any error
 
 # Configuration
 IMAGE_NAME="fintech-tools"
-VERSION="0.7" # v0.7: Neovim + Python 3.13 + uv; gh-copilot installed via direct binary (no auth required at build time)
+VERSION="0.8" # v0.8: + R 4.x (CRAN noble-cran40) + tidyverse system libs; yazi PTY size fix
 TAR_FILE="$HOME/fintech-tools.tar"
 SIF_FILE="fintech-tools.sif"
 REMOTE_USER="gson"
@@ -258,6 +258,11 @@ main() {
 
   end_timer "Prerequisites check"
 
+  # Collect ALL deployment decisions upfront, before any building, so the user
+  # can answer once and walk away while the build/convert runs unattended.
+  # A single SSH mux is opened later — one password prompt covers everything.
+  collect_transfer_decisions
+
   # Step 1: Clean existing image and build Docker Image with Podman
   print_status "Step 1: Checking for existing images and building Docker image with Podman..."
 
@@ -345,12 +350,12 @@ main() {
 
   end_timer "Singularity conversion"
 
-  # Step 4: Offer transfer to HPC (from README Step 3)
-  print_status "Step 4: HPC deployment preparation..."
+  # Step 4: HPC deployment — one SSH mux, all transfers in a single batch
+  # (decisions were already collected at startup; no interactive prompts here)
+  print_status "Step 4: HPC deployment..."
   setup_ssh_mux
   start_timer
-  offer_transfer_to_hpc
-  offer_transfer_configs
+  execute_all_transfers
   teardown_ssh_mux
   end_timer "HPC transfer process"
 
@@ -503,127 +508,197 @@ EOF
   fi
 }
 
-# Transfer ~/.config folders and .zshrc to HPC
-offer_transfer_configs() {
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 1 — Gather all deployment decisions BEFORE touching SSH.
+# Called at startup so the user answers once and the build runs unattended.
+# Answers are stored in XFER_* globals; no SSH connections are made here.
+# ─────────────────────────────────────────────────────────────────────────────
+collect_transfer_decisions() {
   local SCRIPT_DIR
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  local ZSHRC_LOCAL="${SCRIPT_DIR}/.zshrc"
-  local -a MUX=()
-  [ -n "$SSH_CONTROL_SOCKET" ] && MUX=(-o ControlMaster=auto -o ControlPath="${SSH_CONTROL_SOCKET}")
-
-  # ── Config folders (optional) ───────────────────────────────────────────────
-  echo
-  print_status "Sync ~/.config folders + .zshrc to CIRCE"
-  read -r -p "Sync config folders (nvim, starship, yazi, zellij, etc.) to ${REMOTE_USER}@${REMOTE_HOST}? (y/N): " REPLY </dev/tty
-  echo
-
-  if [[ $REPLY =~ ^[Yy]$ ]]; then
-    # Rsync selected ~/.config sub-directories to remote ~/.config/
-    # starship is intentionally excluded: run once inside the container on CIRCE:
-    #   starship preset nerd-font-symbols -o ~/.config/starship.toml
-    local CONFIGS=(
-      avante.nvim
-      github-copilot
-      htop
-      nvim
-      yazi
-      zellij
-    )
-
-    print_status "Syncing ~/.config folders to ${REMOTE_USER}@${REMOTE_HOST}:~/.config/ ..."
-    local rsync_sources=()
-    for cfg in "${CONFIGS[@]}"; do
-      local src="$HOME/.config/$cfg"
-      if [ -e "$src" ]; then
-        rsync_sources+=("$src")
-      else
-        print_warning "  Skipping missing: ~/.config/$cfg"
-      fi
-    done
-
-    if [ ${#rsync_sources[@]} -gt 0 ]; then
-      local SSH_E="ssh"
-      [ -n "$SSH_CONTROL_SOCKET" ] && SSH_E="ssh -o ControlMaster=auto -o ControlPath=${SSH_CONTROL_SOCKET}"
-
-      # Pre-create remote ~/.config so openrsync (macOS) works without --mkpath
-      ssh "${MUX[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p ~/.config" 2>/dev/null
-      if rsync -avz -e "$SSH_E" "${rsync_sources[@]}" \
-        "${REMOTE_USER}@${REMOTE_HOST}:~/.config/"; then
-        print_success "✓ Config folders synced successfully"
-        print_status "Starship not copied — run once inside the container on CIRCE to set up:"
-        echo "    starship preset nerd-font-symbols -o ~/.config/starship.toml"
-      else
-        print_error "Failed to sync config folders"
-      fi
-    fi
-  else
-    print_status "Skipping config folder sync"
-  fi
-
-  # ── .zshrc (always offered) ──────────────────────────────────────────────────
-  if [ ! -f "$ZSHRC_LOCAL" ]; then
-    print_warning ".zshrc not found at ${ZSHRC_LOCAL} — skipping"
-    return 0
-  fi
 
   echo
-  print_status "Transfer .zshrc to CIRCE"
-  if ssh "${MUX[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "[ -f ~/.zshrc ]" 2>/dev/null; then
-    print_warning "~/.zshrc already exists on ${REMOTE_HOST}!"
-    read -r -p "Overwrite ~/.zshrc on CIRCE? (y/N): " OVERWRITE_REPLY </dev/tty
+  echo "============================================================"
+  print_status "Deployment decisions — answer now, then build runs unattended"
+  print_status "All remote transfers will use ONE SSH connection after the build"
+  echo "============================================================"
+  echo
+
+  # ── SIF ──────────────────────────────────────────────────────────────────────
+  XFER_SIF=0
+  read -r -p "Transfer ${SIF_FILE} to CIRCE ${REMOTE_PATH} after build? (y/N): " _r </dev/tty; echo
+  [[ $_r =~ ^[Yy]$ ]] && XFER_SIF=1
+
+  # ── Config folders ────────────────────────────────────────────────────────────
+  XFER_CONFIGS=0
+  XFER_CONFIG_LIST=(avante.nvim github-copilot htop nvim yazi zellij)
+  echo
+  read -r -p "Sync ~/.config folders (nvim, yazi, zellij, etc.) to CIRCE? (y/N): " _r </dev/tty; echo
+  [[ $_r =~ ^[Yy]$ ]] && XFER_CONFIGS=1
+
+  # ── .zshrc ────────────────────────────────────────────────────────────────────
+  XFER_ZSHRC=0
+  XFER_ZSHRC_SRC="${SCRIPT_DIR}/.zshrc"
+  if [ -f "$XFER_ZSHRC_SRC" ]; then
     echo
-    if [[ ! $OVERWRITE_REPLY =~ ^[Yy]$ ]]; then
-      print_status "Skipping .zshrc transfer — file NOT overwritten"
-      return 0
-    fi
+    read -r -p "Transfer .zshrc to CIRCE ~/.zshrc? (y/N): " _r </dev/tty; echo
+    [[ $_r =~ ^[Yy]$ ]] && XFER_ZSHRC=1
+  else
+    print_warning ".zshrc not found at ${XFER_ZSHRC_SRC} — skipping"
   fi
 
-  print_status "Transferring .zshrc to ${REMOTE_USER}@${REMOTE_HOST}:~/.zshrc ..."
-  if scp "${MUX[@]}" "$ZSHRC_LOCAL" "${REMOTE_USER}@${REMOTE_HOST}:~/.zshrc"; then
-    print_success "✓ .zshrc transferred to CIRCE"
+  # ── term_session.sh → CIRCE ~/sh/ ─────────────────────────────────────────────
+  XFER_TERM=0
+  XFER_TERM_SRC="${SCRIPT_DIR}/term_session.sh"
+  if [ -f "$XFER_TERM_SRC" ]; then
+    echo
+    read -r -p "Deploy term_session.sh to CIRCE ~/sh/? (y/N): " _r </dev/tty; echo
+    [[ $_r =~ ^[Yy]$ ]] && XFER_TERM=1
   else
-    print_error "Failed to transfer .zshrc"
+    print_warning "term_session.sh not found — skipping"
   fi
+
+  # ── connect_nvim.sh → local ~/  (no SSH needed) ───────────────────────────────
+  XFER_CONNECT=0
+  XFER_CONNECT_SRC="${SCRIPT_DIR}/connect_nvim.sh"
+  if [ -f "$XFER_CONNECT_SRC" ]; then
+    echo
+    if [ -f "$HOME/connect_nvim.sh" ]; then
+      print_warning "~/connect_nvim.sh already exists"
+      read -r -p "Overwrite ~/connect_nvim.sh? (y/N): " _r </dev/tty; echo
+    else
+      read -r -p "Install connect_nvim.sh to ~/connect_nvim.sh? (y/N): " _r </dev/tty; echo
+    fi
+    [[ $_r =~ ^[Yy]$ ]] && XFER_CONNECT=1
+  else
+    print_warning "connect_nvim.sh not found — skipping"
+  fi
+
+  # ── Summary ───────────────────────────────────────────────────────────────────
+  echo
+  echo "============================================================"
+  local _will=()
+  [ "${XFER_SIF:-0}"     -eq 1 ] && _will+=("SIF → CIRCE ${REMOTE_PATH}")
+  [ "${XFER_CONFIGS:-0}" -eq 1 ] && _will+=("configs → CIRCE ~/.config/")
+  [ "${XFER_ZSHRC:-0}"   -eq 1 ] && _will+=(".zshrc → CIRCE ~/")
+  [ "${XFER_TERM:-0}"    -eq 1 ] && _will+=("term_session.sh → CIRCE ~/sh/")
+  [ "${XFER_CONNECT:-0}" -eq 1 ] && _will+=("connect_nvim.sh → ~/")
+  if [ ${#_will[@]} -gt 0 ]; then
+    print_status "Will deploy after build:"
+    for _item in "${_will[@]}"; do echo "  • $_item"; done
+  else
+    print_status "No deployments selected — all transfers will be skipped"
+  fi
+  echo "============================================================"
+  echo
 }
 
-# Transfer to HPC (README Step 3)
-offer_transfer_to_hpc() {
-  if [ -f "${SIF_FILE}" ]; then
-    echo
-    print_status "Deploy to HPC System"
-    send_pushover_notification "🔐 Transfer Ready" "Container build complete! Ready to transfer ${SIF_FILE} to CIRCE HPC. Please check your terminal to confirm transfer."
-    read -r -p "Do you want to transfer ${SIF_FILE} to CIRCE HPC? (y/N): " REPLY </dev/tty
-    echo
+# ─────────────────────────────────────────────────────────────────────────────
+# PHASE 2 — Execute all transfers using a single SSH mux.
+# Called after the build/convert steps; the mux is already set up by main().
+# All remote files are staged locally then pushed in ONE rsync call so that
+# CIRCE only sees two SSH connections total (scp for the SIF + rsync for
+# everything else), preventing rapid-connection brute-force detection.
+# ─────────────────────────────────────────────────────────────────────────────
+execute_all_transfers() {
+  local -a MUX=()
+  [ -n "$SSH_CONTROL_SOCKET" ] && MUX=(-o ControlMaster=auto -o ControlPath="${SSH_CONTROL_SOCKET}")
+  local SSH_E="ssh"
+  [ -n "$SSH_CONTROL_SOCKET" ] && SSH_E="ssh -o ControlMaster=auto -o ControlPath=${SSH_CONTROL_SOCKET}"
 
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-      print_status "Transferring to ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}..."
-      send_pushover_notification "🔐 Credential Required" "Starting transfer to CIRCE HPC. Please enter your password when prompted."
+  # ── Local: install connect_nvim.sh (no SSH) ───────────────────────────────────
+  if [ "${XFER_CONNECT:-0}" -eq 1 ]; then
+    if cp "$XFER_CONNECT_SRC" "$HOME/connect_nvim.sh" && chmod +x "$HOME/connect_nvim.sh"; then
+      print_success "✓ connect_nvim.sh installed to ~/connect_nvim.sh"
+    else
+      print_error "Failed to install connect_nvim.sh to home directory"
+    fi
+  fi
+
+  # Bail if nothing needs the network
+  local _do_remote=$(( ${XFER_SIF:-0} + ${XFER_CONFIGS:-0} + ${XFER_ZSHRC:-0} + ${XFER_TERM:-0} ))
+  [ "$_do_remote" -eq 0 ] && return 0
+
+  # ── Remote: SIF (large file — dedicated scp, same mux) ───────────────────────
+  if [ "${XFER_SIF:-0}" -eq 1 ]; then
+    if [ ! -f "$SIF_FILE" ]; then
+      print_warning "SIF file ${SIF_FILE} not found — skipping"
+    else
+      echo
+      print_status "Transferring ${SIF_FILE} to ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}..."
+      send_pushover_notification "🔐 Transfer Starting" "Beginning SIF transfer to CIRCE."
       echo "Command: scp ${SIF_FILE} ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
-
-      # Time the transfer
-      transfer_start=$(date +%s)
-      local -a MUX=()
-      [ -n "$SSH_CONTROL_SOCKET" ] && MUX=(-o ControlMaster=auto -o ControlPath="${SSH_CONTROL_SOCKET}")
-      scp "${MUX[@]}" "${SIF_FILE}" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
-      transfer_end=$(date +%s)
-      transfer_time=$((transfer_end - transfer_start))
-
-      if [ $? -eq 0 ]; then
-        print_success "File transferred successfully to CIRCE in ${transfer_time}s!"
-        send_pushover_notification "✅ Transfer Complete" "File transferred successfully to CIRCE HPC in ${transfer_time}s!"
+      local _ts _te _tt
+      _ts=$(date +%s)
+      ssh "${MUX[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p ${REMOTE_PATH}" 2>/dev/null
+      if scp "${MUX[@]}" "${SIF_FILE}" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"; then
+        _te=$(date +%s); _tt=$((_te - _ts))
+        print_success "✓ SIF transferred to CIRCE in ${_tt}s"
+        send_pushover_notification "✅ Transfer Complete" "SIF transferred to CIRCE in ${_tt}s."
       else
-        print_error "Failed to transfer file to CIRCE"
-        send_pushover_notification "❌ Transfer Failed" "Failed to transfer file to CIRCE HPC. Manual transfer required."
-        print_status "You can transfer manually using:"
-        echo "scp ${SIF_FILE} ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
+        print_error "Failed to transfer SIF to CIRCE"
+        send_pushover_notification "❌ Transfer Failed" "SIF transfer failed. Manual: scp ${SIF_FILE} ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
+        print_status "Manual transfer: scp ${SIF_FILE} ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
+      fi
+    fi
+  fi
+
+  # ── Remote: configs + .zshrc + term_session.sh — ONE rsync via staging ────────
+  local _do_batch=$(( ${XFER_CONFIGS:-0} + ${XFER_ZSHRC:-0} + ${XFER_TERM:-0} ))
+  if [ "$_do_batch" -gt 0 ]; then
+    local STAGING
+    STAGING=$(mktemp -d)
+    local _remote_mkdirs=()
+    local _staged=()
+
+    if [ "${XFER_CONFIGS:-0}" -eq 1 ]; then
+      mkdir -p "$STAGING/.config"
+      _remote_mkdirs+=("~/.config")
+      local _ok_cfg=()
+      for cfg in "${XFER_CONFIG_LIST[@]}"; do
+        local src="$HOME/.config/$cfg"
+        if [ -e "$src" ]; then
+          cp -r "$src" "$STAGING/.config/"
+          _ok_cfg+=("$cfg")
+        else
+          print_warning "  Skipping missing: ~/.config/$cfg"
+        fi
+      done
+      [ ${#_ok_cfg[@]} -gt 0 ] && _staged+=("~/.config/{$(IFS=,; echo "${_ok_cfg[*]}")}")
+    fi
+
+    if [ "${XFER_ZSHRC:-0}" -eq 1 ]; then
+      cp "$XFER_ZSHRC_SRC" "$STAGING/.zshrc"
+      _staged+=(".zshrc")
+    fi
+
+    if [ "${XFER_TERM:-0}" -eq 1 ]; then
+      mkdir -p "$STAGING/sh"
+      _remote_mkdirs+=("~/sh")
+      cp "$XFER_TERM_SRC" "$STAGING/sh/term_session.sh"
+      _staged+=("sh/term_session.sh")
+    fi
+
+    # Pre-create all remote dirs in ONE ssh call
+    if [ ${#_remote_mkdirs[@]} -gt 0 ]; then
+      ssh "${MUX[@]}" "${REMOTE_USER}@${REMOTE_HOST}" \
+        "mkdir -p ${_remote_mkdirs[*]}" 2>/dev/null
+    fi
+
+    # ONE rsync pushes everything: staging/ → remote ~/
+    echo
+    print_status "Syncing to CIRCE in one batch: ${_staged[*]}"
+    if rsync -avz -e "$SSH_E" "$STAGING/" "${REMOTE_USER}@${REMOTE_HOST}:~/"; then
+      print_success "✓ All files synced to CIRCE: ${_staged[*]}"
+      if [ "${XFER_CONFIGS:-0}" -eq 1 ]; then
+        print_status "Starship not synced — run once inside the container on CIRCE:"
+        echo "    starship preset nerd-font-symbols -o ~/.config/starship.toml"
       fi
     else
-      print_status "Skipping transfer to CIRCE"
-      print_status "To transfer manually, run:"
-      echo "scp ${SIF_FILE} ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
+      print_error "Batch sync to CIRCE failed"
     fi
-  else
-    print_warning "No .sif file found to transfer"
+
+    rm -rf "$STAGING"
   fi
 }
 

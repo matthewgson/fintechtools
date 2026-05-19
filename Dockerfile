@@ -3,8 +3,8 @@
 FROM ubuntu:24.04
 
 LABEL maintainer="Matthew Son"
-LABEL description="HPC container: Neovim + Python 3.13 + uv"
-LABEL version="0.7"
+LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x"
+LABEL version="0.8"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/New_York
@@ -41,11 +41,13 @@ RUN apt-get update && \
     # Compression / networking
     libcurl4-openssl-dev \
     libssl-dev \
+    libssh2-1-dev \
     libz-dev \
     libbz2-dev \
     liblz4-dev \
     libzstd-dev \
     libsnappy-dev \
+    xz-utils \
     # XML / protobuf
     libxml2-dev \
     libxml2-utils \
@@ -69,6 +71,10 @@ RUN apt-get update && \
     libfribidi-dev \
     libharfbuzz-dev \
     libgit2-dev \
+    # Database / ODBC (RPostgres, RSQLite, RODBC/odbc)
+    libpq-dev \
+    libsqlite3-dev \
+    unixodbc-dev \
     # Neovim / LazyVim CLI deps
     ripgrep \
     fd-find \
@@ -179,9 +185,36 @@ RUN UV_VERSION=$(curl -s https://api.github.com/repos/astral-sh/uv/releases/late
     chmod +x /usr/local/bin/uv /usr/local/bin/uvx && \
     rm -rf /tmp/uv.tar.gz /tmp/uv-x86_64-unknown-linux-gnu
 
-# R is intentionally NOT installed in this image (dropped in v0.6 — too slow
-# to compile R + CRAN packages from source). Re-add as a separate stage if
-# needed; see git history for the previous CRAN noble-cran40 setup.
+# ─── Stage 5: R 4.x (CRAN noble-cran40) + tidyverse build dependencies ──────
+# Installs R base + dev headers.  The system libraries required to compile core
+# tidyverse packages from source (libxml2, libcurl, libssl, libcairo2, libpng,
+# libjpeg, libtiff5, libfontconfig, libfreetype, libharfbuzz, libfribidi,
+# libgit2, libblas, liblapack) are already present from Stage 1.
+# The packages below cover the remaining tidyverse / spatial / crypto deps:
+#   libudunits2-dev  → units, terra, sf
+#   libgdal-dev      → sf, terra, rgdal
+#   libgeos-dev      → sf
+#   libproj-dev      → sf
+#   libsodium-dev    → sodium, openssl
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libudunits2-dev \
+        libgdal-dev \
+        libgeos-dev \
+        libproj-dev \
+        libsodium-dev && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /etc/apt/keyrings && \
+    wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc \
+        | gpg --dearmor -o /etc/apt/keyrings/cran.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/cran.gpg] \
+https://cloud.r-project.org/bin/linux/ubuntu noble-cran40/" \
+        > /etc/apt/sources.list.d/cran.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        r-base \
+        r-base-dev && \
+    rm -rf /var/lib/apt/lists/*
 
 # ─── Stage 6: Neovim (latest stable binary, x86_64) ─────────────────────────
 RUN NVIM_VERSION=$(curl -s https://api.github.com/repos/neovim/neovim/releases/latest \
@@ -457,13 +490,45 @@ alias vim="nvim"
 # on exit, AND so the `z` key (zoxide --interactive → fzf) gets proper
 # terminal handoff inside the multiplexer.
 function y() {
-    local tmp cwd
+    local tmp cwd _sz _cols _rows
+    # Resolve terminal dimensions in priority order:
+    #
+    #   1. stty size — reads TIOCGWINSZ directly from the PTY fd.  Correct for
+    #      zellij panes (zellij sets each pane's PTY size) and for any resize
+    #      (SSH sends TIOCSWINSZ + SIGWINCH on the remote PTY after a resize,
+    #      making TIOCGWINSZ reliable immediately afterwards).
+    #
+    #   2. _SSH_COLS / _SSH_ROWS — injected by connect_nvim.sh from stty size on
+    #      the Mac terminal at connect time.  zsh will NOT overwrite these names
+    #      (unlike $COLUMNS/$LINES, which zsh resets from TIOCGWINSZ during its
+    #      own interactive-init sequence, potentially stamping wrong defaults).
+    #
+    #   3. Hard defaults (80 × 24).
+    _sz=$(stty size 2>/dev/null)        # "rows cols", e.g. "60 220"
+    _cols="${_sz##* }" _rows="${_sz%% *}"
+    (( ${_cols:-0} > 0 && ${_rows:-0} > 0 )) 2>/dev/null || {
+        _cols="${_SSH_COLS:-80}" _rows="${_SSH_ROWS:-24}"
+    }
+    stty cols "$_cols" rows "$_rows" 2>/dev/null
     tmp="$(mktemp -t "yazi-cwd.XXXXXX")"
-    yazi "$@" --cwd-file="$tmp"
+    COLUMNS="$_cols" LINES="$_rows" yazi "$@" --cwd-file="$tmp"
     if cwd="$(command cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
         builtin cd -- "$cwd"
     fi
     rm -f -- "$tmp"
+}
+
+# ── SIGWINCH trap: refresh _SSH_COLS/_SSH_ROWS and the kernel PTY record ───────
+# After a terminal resize, SSH calls TIOCSWINSZ on the remote PTY and sends
+# SIGWINCH.  TIOCGWINSZ is then valid; capture the new values into
+# _SSH_COLS/_SSH_ROWS so the next `y` launch uses post-resize dimensions.
+TRAPWINCH() {
+    local _sz
+    _sz=$(stty size 2>/dev/null)
+    _SSH_COLS="${_sz##* }" _SSH_ROWS="${_sz%% *}"
+    (( ${_SSH_COLS:-0} > 0 )) 2>/dev/null || _SSH_COLS="${COLUMNS:-80}"
+    (( ${_SSH_ROWS:-0} > 0 )) 2>/dev/null || _SSH_ROWS="${LINES:-24}"
+    stty cols "${_SSH_COLS}" rows "${_SSH_ROWS}" 2>/dev/null
 }
 
 # ── shell integrations (interactive only) ────────────────────────────────────

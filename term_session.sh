@@ -74,7 +74,7 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Start Time: $START_TIME"
 echo "Compute Node: $COMPUTE_NODE"
 echo "Node IP: $NODE_IP"
-echo "Container: fintech-tools.sif (v0.6 - CPU only)"
+echo "Container: fintech-tools.sif (v0.8 - CPU only)"
 echo "Connect: ssh -J gson@$LOGIN_NODE -t gson@$COMPUTE_NODE '/apps/singularity/3.5.3/bin/singularity exec instance://$INSTANCE zsh -i'"
 echo "========================================="
 
