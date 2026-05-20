@@ -42,40 +42,7 @@ Yazi deps included (per [yazi docs](https://yazi-rs.github.io/docs/installation)
 `file`, `ffmpeg`, `p7zip`, `jq`, `poppler-utils`, `fd`, `ripgrep`, `fzf`,
 `zoxide`, `imagemagick`, `xclip`, `resvg`, `unar`.
 
-## AI Tools
-
-```bash
-# GitHub Copilot standalone CLI
-copilot                                           # interactive agent
-copilot -m "explain this Dockerfile"              # single-shot prompt
-copilot -m "write a SLURM sbatch script for R"   # shell/code tasks
-
-# Anthropic Claude Code
-claude                                            # interactive agent
-claude -p "review this function"                  # single-shot prompt
-claude --continue                                 # resume last conversation
 ```
-
-## HPC deployment
-
-Container drops at `~/containers/fintech-tools.sif` on CIRCE.
-Launch a dev session: `sbatch dev_session.sh` (SSH on 2222, port-forward for
-Positron via 2223 — see `dev_session.sh` for details).
-
-### SSH connection
-
-```bash
-# Direct (ghostty / VSCode Remote-SSH)
-ssh -J gson@circe.rc.usf.edu gson@<compute_node> -p 2222 -i ~/.ssh/local_mac_to_singularity
-
-# Positron (needs local forward)
-autossh -M 0 -f -N -L 2223:<compute_node>:2222 gson@circe.rc.usf.edu
-# then connect Positron → localhost:2223
-```
-
-Container expects host-side `~/ssh_keys/` mounted into `/etc/ssh` with host
-keys + `sshd_config` + `authorized_keys` containing your local pubkey
-(`~/.ssh/local_mac_to_singularity.pub`).
 
 ## mac-open — open remote files on Mac browser
 
@@ -107,13 +74,16 @@ the container's `localhost:8765` is the Mac's loopback.
    ```bash
    launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.matthewson.mac-open-listener.plist
    ```
+
    Manage it:
+
    ```bash
    launchctl kickstart -k gui/$(id -u)/com.matthewson.mac-open-listener   # restart
    launchctl bootout    gui/$(id -u)/com.matthewson.mac-open-listener     # stop+unload
    lsof -nP -iTCP:8765                                                    # verify it's listening
    tail -f ~/Library/Logs/mac-open-listener.log                           # watch traffic
    ```
+
    Files arrive in `~/.mac-open-inbox`. If you prefer a visible terminal
    instance instead, bootout the agent and run `~/mac_open_listener.py` by
    hand (Ctrl-C to stop).
@@ -146,10 +116,12 @@ the cfg name to the `replace`/`overlay` case in `build_container.sh:execute_all_
 ### Test
 
 After SSH'ing in via `./connect_nvim.sh` (with the Mac listener running):
+
 ```bash
 mac-open https://example.com           # browser pops up on Mac
 mac-open /work_bgfs/g/gson/some.pdf    # PDF opens on Mac
 ```
+
 In yazi: hit `o` on a `.pdf`/`.html`/image → routes through `mac-open`.
 In Neovim/snacks-explorer: `o` on the same files works the same way (via the
 `vim.ui.open` override in `mac_open.lua`).
@@ -178,16 +150,3 @@ In Neovim/snacks-explorer: `o` on the same files works the same way (via the
 about 30s vs. ~10 minutes for the from-source CRAN build. The config lives at
 `/etc/R/Rprofile.site` inside the container; switch the URL from
 `noble/latest` to `noble/2026-MM-DD` for a pinned, reproducible snapshot.
-
-## Files
-
-- `Dockerfile` — image definition
-- `build_container.sh` — build + convert + transfer; applies per-cfg sync policy
-- `dev_session.sh` — SLURM job script for the dev session on CIRCE
-- `connect_nvim.sh` — Mac → CIRCE → container connection (adds the mac-open `-R` tunnel)
-- `mac_open.py` — container-side client (installed as `/usr/local/bin/mac-open`)
-- `mac_open_listener.py` — Mac-side HTTP listener for mac-open
-- `configs/yazi/` — container yazi config (replaces Mac's on CIRCE)
-- `configs/nvim/lua/plugins/mac_open.lua` — LazyVim drop-in plugin overlaid on Mac's nvim config
-- `ssh_config`, `sshd_config` — SSH templates
-- `~/.pushover_config` (optional, not in repo) — Pushover token/user for build notifications

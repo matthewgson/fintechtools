@@ -1,0 +1,4 @@
+[[cmp.prepend_keymap]]
+on   = "<C-y>"
+run  = "close --submit"
+desc = "Confirm completion"

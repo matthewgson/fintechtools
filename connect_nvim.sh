@@ -71,9 +71,34 @@ unset _sz
 # which zsh resets from TIOCGWINSZ during interactive init).  The y() wrapper
 # in /etc/zsh/zshrc reads them as the authoritative fallback when TIOCGWINSZ
 # inside Singularity returns 0 or an 80×24 default.
+# ─── mac-open reverse tunnel ──────────────────────────────────────────────────
+# -R 8765:127.0.0.1:8765 forwards the compute node's localhost:8765 back to the
+# Mac's localhost:8765, where mac_open_listener.py (LaunchAgent
+# com.matthewson.mac-open-listener) accepts file/URL open requests from
+# `mac-open` inside the container.  Singularity shares host networking, so
+# the container can reach the compute node's loopback transparently.
+#
+# Local listener sanity check: if nothing is bound to 127.0.0.1:8765 on the
+# Mac, the reverse tunnel would land on a dead port and every `mac-open` call
+# would just hang / time out.  Warn loudly so the user notices.
+if ! lsof -nP -iTCP@127.0.0.1:8765 -sTCP:LISTEN >/dev/null 2>&1; then
+    echo ""
+    echo "⚠  mac-open: nothing listening on 127.0.0.1:8765 on this Mac."
+    echo "    Start it with one of:"
+    echo "      launchctl kickstart -k gui/\$(id -u)/com.matthewson.mac-open-listener"
+    echo "      python3 ~/mac_open_listener.py &"
+    echo "    Continuing — but mac-open inside the container will fail until fixed."
+    echo ""
+fi
+
+# -o ExitOnForwardFailure=yes: if the compute node can't bind 8765 (e.g. an
+# orphaned forward from a previous session is holding the port), ssh aborts
+# immediately instead of dropping you into a shell with a dead tunnel.
 SINGULARITY=/apps/singularity/3.5.3/bin/singularity
 ssh \
     -J "$LOGIN_ALIAS" \
+    -R 8765:127.0.0.1:8765 \
+    -o ExitOnForwardFailure=yes \
     -tt \
     "$REMOTE_USER@$NODE" \
     "TERM=xterm-256color COLUMNS=$COLS LINES=$ROWS _SSH_COLS=$COLS _SSH_ROWS=$ROWS \

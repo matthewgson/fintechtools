@@ -1,0 +1,22 @@
+# configs/yazi/yazi.toml — synced to CIRCE by build_container.sh.
+#
+# Inside the container, `mac-open` ships files/URLs to the Mac listener
+# (mac_open_listener.py running on Mac, reached via SSH -R 8765 forward).
+# See README.md "mac-open" section.
+
+[opener]
+mac-open = [
+  { run = 'mac-open "$1"', desc = "Open on Mac", block = false, orphan = true },
+]
+
+[open]
+prepend_rules = [
+  { url = "*.html", use = "mac-open" },
+  { url = "*.htm",  use = "mac-open" },
+  { url = "*.pdf",  use = "mac-open" },
+  { url = "*.png",  use = "mac-open" },
+  { url = "*.jpg",  use = "mac-open" },
+  { url = "*.jpeg", use = "mac-open" },
+  { url = "*.svg",  use = "mac-open" },
+  { url = "*.gif",  use = "mac-open" },
+]
