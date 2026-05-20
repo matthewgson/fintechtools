@@ -7,7 +7,7 @@ set -e # Exit on any error
 
 # Configuration
 IMAGE_NAME="fintech-tools"
-VERSION="0.9" # v0.9: + Quarto + PPM (CRAN binary repo) + gh Copilot CLI LS; GH_DATA_DIR in zshenv
+VERSION="0.8" # v0.8: + Quarto + PPM (CRAN binary repo) + standalone Copilot CLI
 TAR_FILE="$HOME/fintech-tools.tar"
 SIF_FILE="fintech-tools.sif"
 REMOTE_USER="gson"

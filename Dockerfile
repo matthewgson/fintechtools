@@ -3,8 +3,8 @@
 FROM ubuntu:24.04
 
 LABEL maintainer="Matthew Son"
-LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + gh Copilot CLI"
-LABEL version="0.9"
+LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Copilot CLI"
+LABEL version="0.8"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/New_York
@@ -351,19 +351,6 @@ RUN mkdir -p -m 755 /etc/apt/keyrings && \
     apt-get install -y gh && \
     rm -rf /var/lib/apt/lists/*
 
-# ─── Stage 10b: GitHub Copilot CLI extension ─────────────────────────────────
-# Install to /usr/local/share/gh so the extension survives the Singularity
-# runtime bind-mount that shadows /home/gson with the host home directory.
-# Direct binary download avoids `gh auth login` requirement at build time.
-ENV GH_DATA_DIR=/usr/local/share/gh
-RUN GH_COPILOT_VERSION=$(curl -s https://api.github.com/repos/github/gh-copilot/releases/latest \
-        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/') && \
-    echo "Installing gh-copilot extension ${GH_COPILOT_VERSION}" && \
-    mkdir -p /usr/local/share/gh/extensions/gh-copilot && \
-    curl -L "https://github.com/github/gh-copilot/releases/download/${GH_COPILOT_VERSION}/linux-amd64" \
-        -o /usr/local/share/gh/extensions/gh-copilot/gh-copilot && \
-    chmod +x /usr/local/share/gh/extensions/gh-copilot/gh-copilot && \
-    chmod -R 755 /usr/local/share/gh
 
 # ─── Stage 10c: SLURM client passthrough (host-binary binding) ──────────────
 # The HPC cluster runs RHEL 7 with an old SLURM whose RPC protocol is not
@@ -408,14 +395,14 @@ RUN mkdir -p /opt/host-slurm/bin /opt/host-slurm/lib \
         chmod +x "/usr/local/bin/${cmd}"; \
     done
 
-# ─── Stage 11: Claude Code + GitHub Copilot language server + tree-sitter ────
-# @anthropic-ai/claude-code   : Anthropic Claude terminal coding agent.
-# @github/copilot-language-server : GitHub Copilot LSP backend used by Neovim
-#     Copilot plugins (copilot.lua, avante.nvim, etc.).  The gh copilot CLI
-#     extension (Stage 10b) provides `gh copilot suggest/explain`; this package
-#     provides inline completion and chat via the LSP protocol.
-# tree-sitter-cli             : required by nvim-treesitter to compile parsers.
-RUN npm install -g @anthropic-ai/claude-code @github/copilot-language-server tree-sitter-cli
+# ─── Stage 11: AI CLIs + GitHub Copilot LSP + tree-sitter ───────────────────
+# @anthropic-ai/claude-code       : Anthropic Claude terminal coding agent.
+# @github/copilot                 : GitHub Copilot standalone CLI (invoked as `copilot`).
+#                                   Replaces the deprecated `gh-copilot` extension.
+# @github/copilot-language-server : GitHub Copilot LSP backend for Neovim
+#     Copilot plugins (copilot.lua, avante.nvim) — inline completions + chat.
+# tree-sitter-cli                 : required by nvim-treesitter to compile parsers.
+RUN npm install -g @anthropic-ai/claude-code @github/copilot @github/copilot-language-server tree-sitter-cli
 
 # ─── Stage 11b: Starship prompt ──────────────────────────────────────────────
 RUN curl -sS https://starship.rs/install.sh | sh -s -- --yes
@@ -534,11 +521,6 @@ if [ -z "${SLURM_CONF:-}" ]; then
     fi
 fi
 
-# ── GitHub CLI data directory ─────────────────────────────────────────────────
-# gh looks here for extensions (including gh-copilot).  The Docker ENV is set
-# at build time, but Singularity --cleanenv drops it; re-export here so
-# `gh copilot suggest/explain` always finds the extension at runtime.
-export GH_DATA_DIR=/usr/local/share/gh
 EOF
 RUN cat >> /etc/zsh/zshrc << 'EOF'
 
