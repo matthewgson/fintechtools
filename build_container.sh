@@ -7,7 +7,7 @@ set -e # Exit on any error
 
 # Configuration
 IMAGE_NAME="fintech-tools"
-VERSION="0.8" # v0.8: + R 4.x (CRAN noble-cran40) + tidyverse system libs; yazi PTY size fix
+VERSION="0.9" # v0.9: + Quarto + PPM (CRAN binary repo) + gh Copilot CLI LS; GH_DATA_DIR in zshenv
 TAR_FILE="$HOME/fintech-tools.tar"
 SIF_FILE="fintech-tools.sif"
 REMOTE_USER="gson"
@@ -532,6 +532,10 @@ collect_transfer_decisions() {
   # ── Config folders ────────────────────────────────────────────────────────────
   XFER_CONFIGS=0
   XFER_CONFIG_LIST=(avante.nvim github-copilot htop nvim yazi zellij)
+  # Repo-side configs/ provides overrides for container-specific behavior
+  # (e.g. yazi mac-open opener, nvim mac_open.lua plugin).  See execute_all_transfers
+  # for the per-cfg replace/overlay policy.
+  XFER_CONFIGS_DIR="${SCRIPT_DIR}/configs"
   echo
   read -r -p "Sync ~/.config folders (nvim, yazi, zellij, etc.) to CIRCE? (y/N): " _r </dev/tty; echo
   [[ $_r =~ ^[Yy]$ ]] && XFER_CONFIGS=1
@@ -574,6 +578,25 @@ collect_transfer_decisions() {
     print_warning "connect_nvim.sh not found — skipping"
   fi
 
+  # ── mac_open_listener.py → local ~/  (no SSH needed) ──────────────────────────
+  # Same local-install pattern as connect_nvim.sh.  The listener runs on the Mac
+  # before each SSH session; having it at ~/mac_open_listener.py means you can
+  # just `python3 ~/mac_open_listener.py` from any terminal.
+  XFER_LISTENER=0
+  XFER_LISTENER_SRC="${SCRIPT_DIR}/mac_open_listener.py"
+  if [ -f "$XFER_LISTENER_SRC" ]; then
+    echo
+    if [ -f "$HOME/mac_open_listener.py" ]; then
+      print_warning "~/mac_open_listener.py already exists"
+      read -r -p "Overwrite ~/mac_open_listener.py? (y/N): " _r </dev/tty; echo
+    else
+      read -r -p "Install mac_open_listener.py to ~/mac_open_listener.py? (y/N): " _r </dev/tty; echo
+    fi
+    [[ $_r =~ ^[Yy]$ ]] && XFER_LISTENER=1
+  else
+    print_warning "mac_open_listener.py not found — skipping"
+  fi
+
   # ── Summary ───────────────────────────────────────────────────────────────────
   echo
   echo "============================================================"
@@ -583,6 +606,7 @@ collect_transfer_decisions() {
   [ "${XFER_ZSHRC:-0}"   -eq 1 ] && _will+=(".zshrc → CIRCE ~/")
   [ "${XFER_TERM:-0}"    -eq 1 ] && _will+=("term_session.sh → CIRCE ~/sh/")
   [ "${XFER_CONNECT:-0}" -eq 1 ] && _will+=("connect_nvim.sh → ~/")
+  [ "${XFER_LISTENER:-0}" -eq 1 ] && _will+=("mac_open_listener.py → ~/")
   if [ ${#_will[@]} -gt 0 ]; then
     print_status "Will deploy after build:"
     for _item in "${_will[@]}"; do echo "  • $_item"; done
@@ -612,6 +636,15 @@ execute_all_transfers() {
       print_success "✓ connect_nvim.sh installed to ~/connect_nvim.sh"
     else
       print_error "Failed to install connect_nvim.sh to home directory"
+    fi
+  fi
+
+  # ── Local: install mac_open_listener.py (no SSH) ──────────────────────────────
+  if [ "${XFER_LISTENER:-0}" -eq 1 ]; then
+    if cp "$XFER_LISTENER_SRC" "$HOME/mac_open_listener.py" && chmod +x "$HOME/mac_open_listener.py"; then
+      print_success "✓ mac_open_listener.py installed to ~/mac_open_listener.py"
+    else
+      print_error "Failed to install mac_open_listener.py to home directory"
     fi
   fi
 
@@ -656,9 +689,33 @@ execute_all_transfers() {
       _remote_mkdirs+=("~/.config")
       local _ok_cfg=()
       for cfg in "${XFER_CONFIG_LIST[@]}"; do
-        local src="$HOME/.config/$cfg"
-        if [ -e "$src" ]; then
+        # Per-cfg sync policy:
+        #   replace: repo's configs/<cfg>/ fully replaces Mac's ~/.config/<cfg>/
+        #            (use when the container needs a divergent config — yazi
+        #            opens files via mac-open, Mac uses the OS default).
+        #   overlay: Mac's copy is staged first, then repo's configs/<cfg>/* is
+        #            rsync'd on top (additive — e.g. nvim mac_open.lua plugin
+        #            without touching the user's other LazyVim plugins).
+        #   default: Mac is source of truth (legacy behavior).
+        local _is_replace=0 _is_overlay=0
+        case "$cfg" in
+          yazi) _is_replace=1 ;;
+          nvim) _is_overlay=1 ;;
+        esac
+
+        local src=""
+        if [ "$_is_replace" -eq 1 ] && [ -d "${XFER_CONFIGS_DIR}/$cfg" ]; then
+          src="${XFER_CONFIGS_DIR}/$cfg"
+          print_status "  ${cfg}: using repo configs/${cfg}/ (overrides Mac)"
+        elif [ -e "$HOME/.config/$cfg" ]; then
+          src="$HOME/.config/$cfg"
+        fi
+        if [ -n "$src" ]; then
           cp -r "$src" "$STAGING/.config/"
+          if [ "$_is_overlay" -eq 1 ] && [ -d "${XFER_CONFIGS_DIR}/$cfg" ]; then
+            rsync -a "${XFER_CONFIGS_DIR}/$cfg/" "$STAGING/.config/$cfg/"
+            print_status "  ${cfg}: overlaid repo configs/${cfg}/* on Mac copy"
+          fi
           _ok_cfg+=("$cfg")
         else
           print_warning "  Skipping missing: ~/.config/$cfg"

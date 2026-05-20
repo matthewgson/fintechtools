@@ -3,8 +3,8 @@
 FROM ubuntu:24.04
 
 LABEL maintainer="Matthew Son"
-LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x"
-LABEL version="0.8"
+LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + gh Copilot CLI"
+LABEL version="0.9"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/New_York
@@ -216,6 +216,50 @@ https://cloud.r-project.org/bin/linux/ubuntu noble-cran40/" \
         r-base-dev && \
     rm -rf /var/lib/apt/lists/*
 
+# ─── Stage 5b: Posit Package Manager (PPM) as default R repo ────────────────
+# PPM ships precompiled binary packages for Ubuntu Noble, so install.packages()
+# pulls a .deb-like binary instead of compiling from source — turns a 10-minute
+# tidyverse install into ~30 seconds. PPM gates binaries on a Linux user-agent;
+# the HTTPUserAgent override below makes R announce itself correctly.
+#
+# Rolling "latest" channel — change to a YYYY-MM-DD date for reproducible builds.
+RUN mkdir -p /etc/R && \
+    cat > /etc/R/Rprofile.site << 'EOF'
+# /etc/R/Rprofile.site — sourced on every R startup (system-wide).
+# Configure the Posit Package Manager (PPM) as the default CRAN mirror so that
+# install.packages() pulls Linux binary builds for Ubuntu Noble.
+local({
+  ppm <- "https://packagemanager.posit.co/cran/__linux__/noble/latest"
+  r <- getOption("repos")
+  r["CRAN"] <- ppm
+  options(repos = r)
+
+  # PPM serves binary packages only to clients whose User-Agent identifies the
+  # platform.  R's default UA omits the OS, so PPM falls back to source tarballs.
+  options(HTTPUserAgent = sprintf(
+    "R/%s R (%s)",
+    getRversion(),
+    paste(getRversion(), R.version$platform, R.version$arch, R.version$os)
+  ))
+})
+EOF
+
+# ─── Stage 5c: Quarto (scientific publishing — .qmd → PDF/HTML/Word) ────────
+# Quarto bundles its own pandoc and Deno runtime, so the only system dep is a
+# LaTeX distribution for PDF output — NOT installed here to keep the image
+# small.  Run `quarto install tinytex` on first use inside the container if
+# you need PDF rendering.
+RUN QUARTO_VERSION=$(curl -s https://api.github.com/repos/quarto-dev/quarto-cli/releases/latest \
+        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"v\([^"]*\)".*/\1/') && \
+    echo "Installing Quarto ${QUARTO_VERSION}" && \
+    curl -L "https://github.com/quarto-dev/quarto-cli/releases/download/v${QUARTO_VERSION}/quarto-${QUARTO_VERSION}-linux-amd64.tar.gz" \
+        -o /tmp/quarto.tar.gz && \
+    mkdir -p /opt/quarto && \
+    tar -C /opt/quarto --strip-components=1 -xzf /tmp/quarto.tar.gz && \
+    ln -sf /opt/quarto/bin/quarto /usr/local/bin/quarto && \
+    rm /tmp/quarto.tar.gz && \
+    /usr/local/bin/quarto --version
+
 # ─── Stage 6: Neovim (latest stable binary, x86_64) ─────────────────────────
 RUN NVIM_VERSION=$(curl -s https://api.github.com/repos/neovim/neovim/releases/latest \
         | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/') && \
@@ -277,6 +321,14 @@ RUN ZOXIDE_VERSION=$(curl -s https://api.github.com/repos/ajeetdsouza/zoxide/rel
     tar -C /usr/local/bin -xzf /tmp/zoxide.tar.gz zoxide && \
     chmod +x /usr/local/bin/zoxide && \
     rm /tmp/zoxide.tar.gz
+
+# ─── Stage 8d: mac-open bridge ──────────────────────────────────────────────
+# Pure-Python client that ships files/URLs to the Mac for opening.  Pairs with
+# mac_open_listener.py running on the Mac and the SSH -R 8765 reverse forward
+# in connect_nvim.sh.  No external deps — edit mac_open.py at the repo root
+# to extend behavior; this stage just installs it.
+COPY mac_open.py /usr/local/bin/mac-open
+RUN chmod +x /usr/local/bin/mac-open
 
 # ─── Stage 9: Zellij (terminal multiplexer) ─────────────────────────────────
 RUN ZELLIJ_VERSION=$(curl -s https://api.github.com/repos/zellij-org/zellij/releases/latest \
@@ -356,10 +408,14 @@ RUN mkdir -p /opt/host-slurm/bin /opt/host-slurm/lib \
         chmod +x "/usr/local/bin/${cmd}"; \
     done
 
-# ─── Stage 11: Claude Code + tree-sitter CLI (global npm installs) ──────────
-# tree-sitter-cli is required by Neovim's nvim-treesitter plugin to compile
-# language parsers; without it nvim prints "tree-sitter CLI not installed".
-RUN npm install -g @anthropic-ai/claude-code tree-sitter-cli
+# ─── Stage 11: Claude Code + GitHub Copilot language server + tree-sitter ────
+# @anthropic-ai/claude-code   : Anthropic Claude terminal coding agent.
+# @github/copilot-language-server : GitHub Copilot LSP backend used by Neovim
+#     Copilot plugins (copilot.lua, avante.nvim, etc.).  The gh copilot CLI
+#     extension (Stage 10b) provides `gh copilot suggest/explain`; this package
+#     provides inline completion and chat via the LSP protocol.
+# tree-sitter-cli             : required by nvim-treesitter to compile parsers.
+RUN npm install -g @anthropic-ai/claude-code @github/copilot-language-server tree-sitter-cli
 
 # ─── Stage 11b: Starship prompt ──────────────────────────────────────────────
 RUN curl -sS https://starship.rs/install.sh | sh -s -- --yes
@@ -477,6 +533,12 @@ if [ -z "${SLURM_CONF:-}" ]; then
         export SLURM_CONF=/etc/slurm-llnl/slurm.conf
     fi
 fi
+
+# ── GitHub CLI data directory ─────────────────────────────────────────────────
+# gh looks here for extensions (including gh-copilot).  The Docker ENV is set
+# at build time, but Singularity --cleanenv drops it; re-export here so
+# `gh copilot suggest/explain` always finds the extension at runtime.
+export GH_DATA_DIR=/usr/local/share/gh
 EOF
 RUN cat >> /etc/zsh/zshrc << 'EOF'
 
