@@ -1,10 +1,10 @@
 #!/bin/bash
 #
-# connect_nvim.sh — Mac-side script to reconnect to a running nvim_session on CIRCE.
+# connect_nvim2.sh — Mac-side script to reconnect to a running nvim_session2 on CIRCE (node 12).
 #
 # Usage:
-#   ./connect_nvim.sh          # auto-find job and connect
-#   ./connect_nvim.sh <node>   # connect directly to a known node
+#   ./connect_nvim2.sh          # auto-find job and connect
+#   ./connect_nvim2.sh <node>   # connect directly to a known node
 #
 # Drops into an interactive zsh inside the Singularity container.
 # Start zellij/nvim manually from there if you want a persistent layout:
@@ -18,8 +18,8 @@
 LOGIN_ALIAS="circe"
 REMOTE_USER="gson"
 INSTANCE="fintech_nvim"
-# Target compute node — matches #SBATCH --nodelist in term_session.sh
-TARGET_NODE="mdc-1057-13-13"
+# Target compute node — matches #SBATCH --nodelist in another_term_session.sh
+TARGET_NODE="mdc-1057-13-12"
 
 # ─── Find compute node ────────────────────────────────────────────────────────
 if [ -n "$1" ]; then
@@ -38,9 +38,9 @@ else
         echo ""
         echo "Start one:"
         echo "  ssh $LOGIN_ALIAS"
-        echo "  sbatch ~/sh/term_session.sh"
+        echo "  sbatch ~/sh/another_term_session.sh"
         echo ""
-        echo "Once it's running, rerun: ./connect_nvim.sh"
+        echo "Once it's running, rerun: ./connect_nvim2.sh"
         exit 1
     fi
     echo "Found running job on node: $NODE"

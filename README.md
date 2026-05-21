@@ -1,4 +1,4 @@
-# FinTech Tools Container — v0.8
+# FinTech Tools Container — v0.9
 
 HPC container for Financial / Quantitative computing. Built on macOS with Podman, converted to
 Singularity/Apptainer, deployed to CIRCE. Workflow has migrated from VSCode
@@ -22,7 +22,7 @@ podman machine init && podman machine start
 podman machine ssh -- "sudo dnf install -y toolbox && toolbox create && toolbox run sudo dnf install -y apptainer"
 ```
 
-## What's inside (v0.8)
+## What's inside (v0.9)
 
 | Stack | Detail |
 |---|---|
@@ -30,13 +30,14 @@ podman machine ssh -- "sudo dnf install -y toolbox && toolbox create && toolbox 
 | Python | **3.13** via deadsnakes; `/usr/local/bin/python{,3}` symlinked, env vars (`PYTHON`, `RETICULATE_PYTHON`, `UV_PYTHON`) point here — **not** the system 3.12 |
 | uv | Astral binary in `/usr/local/bin/` |
 | R | **4.x** from CRAN noble-cran40, default repo set to [**Posit Package Manager**](https://packagemanager.posit.co/) (`noble/latest`) so `install.packages()` pulls binary builds for Ubuntu instead of compiling from source |
-| Quarto | Latest GitHub release, installed at `/opt/quarto`, on `$PATH` as `quarto`. Bundles pandoc + Deno. For PDF output, run `quarto install tinytex` once inside the container (LaTeX is not pre-installed). |
+| Quarto | Latest GitHub release, installed at `/opt/quarto`, on `$PATH` as `quarto`. Bundles pandoc + Deno. PDF output works out of the box via the TinyTeX install below. |
+| LaTeX | **TinyTeX** baked in at `/opt/TinyTeX` — installed via direct tarball pull from [`rstudio/tinytex-releases`](https://github.com/rstudio/tinytex-releases) (`TinyTeX-linux-x86_64-<TAG>.tar.xz`), no R/Rscript dependency in Stage 5d. Binaries symlinked into `/usr/local/bin` via `tlmgr path add` (with `sys_bin` pinned explicitly so the build does not fall back to `/root/.local/bin`). Ships `latexmk`, `pdflatex`, `xelatex`, `lualatex`, `biber`, plus `collection-latexrecommended`, `collection-fontsrecommended`, and `biblatex`. VimTeX (`lang.tex` extra) and Quarto find them automatically. The image is read-only at runtime, so extra packages install in user-mode — `TEXMFHOME` is pinned to `~/texmf` in zshenv so `tlmgr --usermode init-usertree && tlmgr --usermode install <pkg>` lands in a predictable, kpathsea-discoverable tree (no root required). Alternatively, rebuild the container with the package appended to Stage 5d. A pre-existing `~/.TinyTeX` install is honored — zshenv prepends it to `$PATH` so any user-installed extras win over the system copy. |
 | Editor | Neovim (latest) + LazyVim starter |
 | LazyVim extras | `ai.copilot`, `lang.html`, `lang.python`, plus git/json/markdown/yaml/toml |
 | Terminal | Zellij (multiplexer), Yazi (file manager) with all recommended deps, lazygit, `ncurses-term` (many terminfos) |
 | AI CLIs | `copilot` (GitHub Copilot standalone CLI) + `claude` (Anthropic Claude Code) |
 | SSH | `openssh-server`, port 2222 (legacy VSCode remote still supported) |
-| mac-open | `/usr/local/bin/mac-open` — pure-Python client that ships files/URLs to a listener on the Mac (see "mac-open" below) |
+| mac-open | `/usr/local/bin/mac-open` — pure-Python client that ships files/URLs to a listener on the Mac (see "mac-open" below). VimTeX's PDF viewer (`<localleader>lv`) is routed through it by `configs/nvim/lua/plugins/vimtex.lua`. |
 
 Yazi deps included (per [yazi docs](https://yazi-rs.github.io/docs/installation)):
 `file`, `ffmpeg`, `p7zip`, `jq`, `poppler-utils`, `fd`, `ripgrep`, `fzf`,

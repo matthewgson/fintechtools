@@ -1,0 +1,21 @@
+-- Disable Snacks explorer's "send to trash" behavior.
+--
+-- Snacks.explorer.actions.trash() tries `trash` / `gio trash` / `kioclient`
+-- before falling back to `vim.fn.delete(path, "rf")`. On HPC bind-mounts
+-- like /work_bgfs, `gio trash` aborts with:
+--   "Trashing on system internal mounts is not supported"
+-- and the delete fails outright (the fallback is only reached when no trash
+-- binary is executable, not when one runs and errors).
+--
+-- Setting explorer.trash = false skips the trash commands entirely and uses
+-- the plain delete fallback, which works on any filesystem.
+return {
+  {
+    "folke/snacks.nvim",
+    opts = {
+      explorer = {
+        trash = false,
+      },
+    },
+  },
+}

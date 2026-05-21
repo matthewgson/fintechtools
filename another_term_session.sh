@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --job-name=nvim_session
-#SBATCH --output=/home/g/gson/sh_log/nvim_session.log
+#SBATCH --job-name=nvim_session2
+#SBATCH --output=/home/g/gson/sh_log/nvim_session2.log
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=128
@@ -10,7 +10,7 @@
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=gson@usf.edu
 #SBATCH --time=168:00:00
-#SBATCH --nodelist=mdc-1057-13-13
+#SBATCH --nodelist=mdc-1057-13-12
 
 # Lightweight CPU-only Neovim dev session. Mirrors dev_session.sh structure
 # but drops GPU request, CUDA module load, and /apps/cuda bind so the job

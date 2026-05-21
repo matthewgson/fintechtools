@@ -3,8 +3,8 @@
 FROM ubuntu:24.04
 
 LABEL maintainer="Matthew Son"
-LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Copilot CLI"
-LABEL version="0.8"
+LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Copilot CLI + TinyTeX"
+LABEL version="0.9"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/New_York
@@ -15,6 +15,19 @@ ENV LANG=C.UTF-8
 ENV LD_LIBRARY_PATH="/.singularity.d/libs:$LD_LIBRARY_PATH"
 
 WORKDIR /work_bgfs/g/gson
+
+# ─── Stage 0: Apt resilience ────────────────────────────────────────────────
+# Ubuntu's archive/security mirrors occasionally hand out an in-progress
+# Packages.gz whose size disagrees with the freshly-published Release file
+# ("File has unexpected size … Mirror sync in progress?").  apt's default
+# retry count is 0, so a single hash/size miss aborts the whole `apt-get
+# update`.  Bump retries + per-request timeout so transient mirror windows
+# don't kill the build.
+RUN printf '%s\n' \
+        'Acquire::Retries "5";' \
+        'Acquire::http::Timeout "60";' \
+        'Acquire::https::Timeout "60";' \
+        > /etc/apt/apt.conf.d/99-retries
 
 # ─── Stage 1: Core system packages ──────────────────────────────────────────
 RUN apt-get update && \
@@ -245,10 +258,8 @@ local({
 EOF
 
 # ─── Stage 5c: Quarto (scientific publishing — .qmd → PDF/HTML/Word) ────────
-# Quarto bundles its own pandoc and Deno runtime, so the only system dep is a
-# LaTeX distribution for PDF output — NOT installed here to keep the image
-# small.  Run `quarto install tinytex` on first use inside the container if
-# you need PDF rendering.
+# Quarto bundles its own pandoc and Deno runtime.  LaTeX for PDF output is
+# provided by Stage 5d (TinyTeX) below.
 RUN QUARTO_VERSION=$(curl -s https://api.github.com/repos/quarto-dev/quarto-cli/releases/latest \
         | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"v\([^"]*\)".*/\1/') && \
     echo "Installing Quarto ${QUARTO_VERSION}" && \
@@ -259,6 +270,56 @@ RUN QUARTO_VERSION=$(curl -s https://api.github.com/repos/quarto-dev/quarto-cli/
     ln -sf /opt/quarto/bin/quarto /usr/local/bin/quarto && \
     rm /tmp/quarto.tar.gz && \
     /usr/local/bin/quarto --version
+
+# ─── Stage 5d: TinyTeX (LaTeX for Quarto / RMarkdown / VimTeX PDF output) ───
+# Direct tarball install — no R/Rscript dependency.  Pulls the same prebuilt
+# bundle that `tinytex::install_tinytex()` fetches under the hood from the
+# rstudio/tinytex-releases GitHub repo, then extracts it straight to
+# /opt/TinyTeX.  Faster and removes Stage 5/5b ordering coupling.
+#
+# Why not the upstream shell installer (yihui.org/tinytex/install-bin-unix.sh)?
+#   1. It always appends ".TinyTeX" to $TINYTEX_DIR — so TINYTEX_DIR=/opt/TinyTeX
+#      resolves to TEXDIR=/opt/TinyTeX/.TinyTeX, then `tar -C /opt/TinyTeX`
+#      fails because the parent dir doesn't exist.
+#   2. It pins sys_bin to $HOME/.local/bin — during docker build that's
+#      /root/.local/bin, which is not on anyone's PATH at runtime.
+# The tarball-direct route sidesteps both: `--strip-components=1` normalises
+# the .TinyTeX/ layout into /opt/TinyTeX/, and the explicit `tlmgr option
+# sys_bin /usr/local/bin` + `tlmgr path add` routes binary symlinks into
+# /usr/local/bin so VimTeX, Quarto, and `rmarkdown::render()` find them on
+# $PATH out of the box.
+#
+# Ships:
+#   - Default TinyTeX (latex, pdflatex, xelatex, lualatex, latexmk, tlmgr)
+#   - collection-latexrecommended  (amsmath, hyperref, geometry, tools, …)
+#   - collection-fontsrecommended  (font packages used by most templates)
+#   - biber + biblatex             (modern bibliography stack — not in default)
+#
+# /opt/TinyTeX is read-only at runtime under Singularity SIF.  For extra
+# packages, install at runtime in user-mode — writes to $TEXMFHOME, which
+# zshenv pins to ~/texmf (kpathsea picks it up automatically at compile time):
+#   tlmgr --usermode init-usertree   # one-time: creates ~/texmf tree
+#   tlmgr --usermode install <pkg>
+# Or rebuild the container with the package appended to the tlmgr install line.
+RUN rm -rf /opt/TinyTeX && \
+    TINYTEX_TAG=$(curl -s https://api.github.com/repos/rstudio/tinytex-releases/releases/latest \
+        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/') && \
+    echo "Installing TinyTeX ${TINYTEX_TAG} (default bundle, linux-x86_64)" && \
+    curl -fL "https://github.com/rstudio/tinytex-releases/releases/download/${TINYTEX_TAG}/TinyTeX-linux-x86_64-${TINYTEX_TAG}.tar.xz" \
+        -o /tmp/tinytex.tar.xz && \
+    mkdir -p /opt/TinyTeX && \
+    tar -C /opt/TinyTeX --strip-components=1 -xJf /tmp/tinytex.tar.xz && \
+    rm /tmp/tinytex.tar.xz && \
+    /opt/TinyTeX/bin/x86_64-linux/tlmgr option sys_bin /usr/local/bin && \
+    /opt/TinyTeX/bin/x86_64-linux/tlmgr path add && \
+    /opt/TinyTeX/bin/x86_64-linux/tlmgr install \
+        collection-latexrecommended \
+        collection-fontsrecommended \
+        biber \
+        biblatex && \
+    /opt/TinyTeX/bin/x86_64-linux/tlmgr path add && \
+    /usr/local/bin/latexmk --version >/dev/null && \
+    /usr/local/bin/pdflatex --version | head -1
 
 # ─── Stage 6: Neovim (latest stable binary, x86_64) ─────────────────────────
 RUN NVIM_VERSION=$(curl -s https://api.github.com/repos/neovim/neovim/releases/latest \
@@ -445,6 +506,29 @@ RUN ln -sf "$(which fdfind)" /usr/local/bin/fd 2>/dev/null || true && \
 # Singularity inherits the host PATH; be explicit so /usr/local/bin tools
 # (nvim, starship, lazygit, uv, …) are always found.
 export PATH="/usr/local/bin:/usr/local/cuda-12.3/bin:$HOME/.local/bin:$PATH"
+
+# ── TinyTeX user-mode binaries: prefer over system /opt/TinyTeX if present ───
+# The system install (Dockerfile Stage 5d) symlinks its binaries into
+# /usr/local/bin via `tlmgr path add`.  But if the user has their own TinyTeX
+# at ~/.TinyTeX (e.g. from a previous `quarto install tinytex` or
+# `tinytex::install_tinytex()`), prepend it so any user-added packages
+# (`tlmgr install <pkg>` on the writable user install) take precedence.
+if [ -d "${HOME}/.TinyTeX/bin/x86_64-linux" ]; then
+    export PATH="${HOME}/.TinyTeX/bin/x86_64-linux:${PATH}"
+fi
+
+# ── TeX user tree (no-root package installs) ─────────────────────────────────
+# The system TinyTeX at /opt/TinyTeX is read-only inside the SIF, so package
+# installs must use `tlmgr --usermode`.  TEXMFHOME is the user-writable tree
+# that kpathsea (via mktexlsr) and the TeX engines (pdflatex, xelatex, …)
+# consult automatically at compile time.  Pinning it to ~/texmf gives a
+# predictable, shareable location on the network home — independent of the
+# TeX Live year-stamped dirs (~/.texlive2024/, …) used for var/config state.
+#
+# One-time bootstrap (run inside the container):
+#   tlmgr --usermode init-usertree   # creates ~/texmf with the standard tree
+#   tlmgr --usermode install <pkg>   # installs into ~/texmf, no root needed
+export TEXMFHOME="${HOME}/texmf"
 
 # ── Make zsh the default for child shells (zellij, tmux, scripts) ────────────
 # CIRCE's /etc/passwd sets login shell to bash, which is inherited via the

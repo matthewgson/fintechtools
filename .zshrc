@@ -23,3 +23,6 @@ eval "$(zoxide init zsh)"
 # Starship prompt initialization
 export STARSHIP_CONFIG="$HOME/.config/starship/starship.toml"
 eval "$(starship init zsh)"
+
+# fzf Integration
+source <(fzf --zsh)
