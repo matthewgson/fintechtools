@@ -50,6 +50,15 @@ cleanup() {
   # Kill the process group
   kill -SIGINT -$GID 2>/dev/null
 
+  # Capture SLURM's view of this job's termination — invaluable for post-mortem
+  # in the next log file.  Bounded with `timeout` in case sacct/scontrol hang
+  # while slurmstepd is mid-teardown.
+  echo "── SLURM job state at termination ──"
+  timeout 5 scontrol show job "$SLURM_JOB_ID" 2>/dev/null | head -40 || true
+  timeout 5 sacct -j "$SLURM_JOB_ID" \
+    --format=JobID,State,Reason,Start,End,Elapsed,Timelimit,ExitCode 2>/dev/null || true
+  echo "─────────────────────────────────────"
+
   # Cancel the SLURM job
   scancel $SLURM_JOB_ID 2>/dev/null
 
@@ -179,6 +188,26 @@ echo "========================================="
 # Using a sleep loop (rather than `wait`) ensures the job stays alive until
 # SLURM hits the wall-clock limit or the user scancels.
 echo "Holding allocation until wall-clock limit (7 days max)..."
+
+# ─── Sanity: surface SLURM's *effective* TimeLimit before we go quiet ────────
+# If QoS/partition silently caps --time below 168h, the job will end early no
+# matter how well the keep-alive loop holds.  Print the real limit so the next
+# post-mortem doesn't have to guess.
+EFFECTIVE_LIMIT=$(scontrol show job "$SLURM_JOB_ID" -o 2>/dev/null \
+  | grep -oE 'TimeLimit=[^ ]+' | head -1 | cut -d= -f2)
+EFFECTIVE_LIMIT="${EFFECTIVE_LIMIT:-unknown}"
+echo "SLURM-enforced TimeLimit for this job: $EFFECTIVE_LIMIT"
+case "$EFFECTIVE_LIMIT" in
+  7-00:00:00 | 168:00:00 | UNLIMITED | unknown) ;;
+  *)
+    echo "⚠  WARNING: TimeLimit is shorter than the requested 7 days."
+    echo "    QoS '${SLURM_JOB_QOS:-?}' or partition '${SLURM_JOB_PARTITION:-?}' is capping it."
+    echo "    The job WILL end at: $EFFECTIVE_LIMIT — investigate with:"
+    echo "       sacctmgr show qos ${SLURM_JOB_QOS:-?} format=Name,MaxWall,GrpTRES,Flags"
+    echo "       scontrol show partition ${SLURM_JOB_PARTITION:-?}"
+    ;;
+esac
+
 while true; do
   sleep 86400 &
   wait $!

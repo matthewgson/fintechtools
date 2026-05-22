@@ -2,3 +2,16 @@
 on   = "<C-y>"
 run  = "close --submit"
 desc = "Confirm completion"
+
+# Skip the system trash on delete.
+# Why: on /work_bgfs (BeeGFS), gio/trash-cli refuses with "Trashing on system
+# internal mounts is not supported", so yazi's default `d` falls back to a
+# cross-filesystem byte copy into ~/.local/share/Trash that stalls for
+# seconds-to-minutes on folders with many entries. `remove --permanently`
+# goes straight to tokio::fs::remove_dir_all (metadata-only unlinks), which
+# matches the snappy feel of snacks-explorer after we set explorer.trash =
+# false in configs/nvim/lua/plugins/snacks.lua.
+[[mgr.prepend_keymap]]
+on   = "d"
+run  = "remove --permanently"
+desc = "Delete permanently (skip trash — fast on /work_bgfs)"
