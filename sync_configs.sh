@@ -64,13 +64,12 @@ echo "========================================="
 echo
 
 # ── Discover what exists ──────────────────────────────────────────────────────
-CONFIG_LIST=(avante.nvim github-copilot htop nvim yazi zellij)
+CONFIG_LIST=(avante.nvim github-copilot btm nvim yazi zellij)
 CONFIGS_DIR="${SCRIPT_DIR}/configs"
 
-HAVE_ZSHRC=0;    [ -f "${SCRIPT_DIR}/.zshrc" ]            && HAVE_ZSHRC=1
-HAVE_TERM=0;     [ -f "${SCRIPT_DIR}/term_session.sh" ]   && HAVE_TERM=1
-HAVE_CONNECT=0;  [ -f "${SCRIPT_DIR}/connect_nvim.sh" ]    && HAVE_CONNECT=1
-HAVE_CONNECT2=0; [ -f "${SCRIPT_DIR}/connect_nvim2.sh" ]   && HAVE_CONNECT2=1
+HAVE_ZSHRC=0;    [ -f "${SCRIPT_DIR}/.zshrc" ]              && HAVE_ZSHRC=1
+HAVE_TERM=0;     [ -f "${SCRIPT_DIR}/term_session.sh" ]     && HAVE_TERM=1
+HAVE_CONNECT=0;  [ -f "${SCRIPT_DIR}/connect_nvim.sh" ]     && HAVE_CONNECT=1
 HAVE_LISTENER=0; [ -f "${SCRIPT_DIR}/mac_open_listener.py" ] && HAVE_LISTENER=1
 
 print_status "Will deploy:"
@@ -78,7 +77,6 @@ echo "  • ~/.config/{$(IFS=,; echo "${CONFIG_LIST[*]}")} → CIRCE"
 [ "$HAVE_ZSHRC"    -eq 1 ] && echo "  • .zshrc → CIRCE ~/"
 [ "$HAVE_TERM"     -eq 1 ] && echo "  • term_session.sh → CIRCE ~/sh/"
 [ "$HAVE_CONNECT"  -eq 1 ] && echo "  • connect_nvim.sh → ~/  (local)"
-[ "$HAVE_CONNECT2" -eq 1 ] && echo "  • connect_nvim2.sh → ~/  (local)"
 [ "$HAVE_LISTENER" -eq 1 ] && echo "  • mac_open_listener.py → ~/  (local)"
 echo
 
@@ -86,11 +84,6 @@ echo
 if [ "$HAVE_CONNECT" -eq 1 ]; then
   cp "${SCRIPT_DIR}/connect_nvim.sh" "$HOME/connect_nvim.sh" && chmod +x "$HOME/connect_nvim.sh"
   print_success "✓ connect_nvim.sh → ~/connect_nvim.sh"
-fi
-
-if [ "$HAVE_CONNECT2" -eq 1 ]; then
-  cp "${SCRIPT_DIR}/connect_nvim2.sh" "$HOME/connect_nvim2.sh" && chmod +x "$HOME/connect_nvim2.sh"
-  print_success "✓ connect_nvim2.sh → ~/connect_nvim2.sh"
 fi
 
 if [ "$HAVE_LISTENER" -eq 1 ]; then

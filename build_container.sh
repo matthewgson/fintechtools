@@ -134,49 +134,50 @@ send_pushover_notification() {
   fi
 }
 
-# Function to check and clean up containers using the image
+# Force-remove all containers that are using the given image so the image
+# can be deleted. Called as part of pre-build cleanup — no prompts.
 cleanup_containers_using_image() {
   local image_name="$1"
-  local containers_using_image
+  local container_ids
 
-  # Find containers using this image (both running and stopped)
-  containers_using_image=$(podman ps -a --filter "ancestor=localhost/${image_name}" --format "{{.ID}} {{.Names}} {{.Status}}" 2>/dev/null)
+  container_ids=$(podman ps -a --filter "ancestor=localhost/${image_name}" \
+    --format "{{.ID}}" 2>/dev/null)
 
-  if [ -n "$containers_using_image" ]; then
-    print_warning "Found containers using image ${image_name}:"
-    echo "$containers_using_image"
-    echo
+  if [ -n "$container_ids" ]; then
+    print_status "Removing containers using image ${image_name}..."
+    for cid in $container_ids; do
+      podman rm -f "$cid" 2>/dev/null && \
+        print_success "✓ Container ${cid} removed" || \
+        print_warning "Could not remove container ${cid} — continuing"
+    done
+  fi
+}
 
-    read -r -p "Do you want to remove these containers? (Y/n): " REPLY </dev/tty
-    echo
-
-    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
-      # Get container IDs
-      local container_ids=$(echo "$containers_using_image" | awk '{print $1}')
-
-      print_status "Removing containers..."
-      for container_id in $container_ids; do
-        print_status "Removing container: $container_id"
-        if podman rm -f "$container_id" 2>/dev/null; then
-          print_success "✓ Container $container_id removed"
-        else
-          print_warning "Failed to remove container $container_id"
-        fi
-      done
-    else
-      print_error "Cannot proceed with image removal while containers are using it."
-      print_status "Please remove containers manually and try again."
-      exit 1
-    fi
+# Remove ALL existing fintech-tools images (any tag) and their dependent
+# containers before a new build, then prune dangling intermediate layers.
+purge_old_images() {
+  local old_ids
+  old_ids=$(podman images --format "{{.ID}} {{.Repository}}:{{.Tag}}" 2>/dev/null \
+    | grep -E "(localhost/)?${IMAGE_NAME}" | awk '{print $1}' | sort -u)
+  if [ -n "$old_ids" ]; then
+    print_status "Removing existing ${IMAGE_NAME} image(s)..."
+    for id in $old_ids; do
+      cleanup_containers_using_image "$id"
+      podman image rm -f "$id" 2>/dev/null && \
+        print_success "✓ Removed image ${id}" || true
+    done
+  fi
+  local dangling
+  dangling=$(podman images -f dangling=true -q 2>/dev/null)
+  if [ -n "$dangling" ]; then
+    print_status "Pruning dangling intermediate layers..."
+    podman image prune -f >/dev/null 2>&1 && \
+      print_success "✓ Dangling layers pruned" || true
   fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SSH connection multiplexer
-# Opens one authenticated connection; scp/rsync/ssh reuse the socket so the
-# user is only prompted for a password ONCE across all HPC transfers.
-# ─────────────────────────────────────────────────────────────────────────────
-SSH_CONTROL_SOCKET=""
 
 setup_ssh_mux() {
   SSH_CONTROL_SOCKET="$(mktemp -u /tmp/circe_mux_XXXXXX)"
@@ -210,7 +211,6 @@ main() {
 
   echo "========================================="
   echo "FinTech Tools Container Build Script"
-  echo "Following README.md workflow"
   echo "Started at: $(date '+%Y-%m-%d %H:%M:%S')"
   echo "========================================="
 
@@ -259,33 +259,6 @@ main() {
 
   # Step 1: Clean any existing image, then build
   print_status "Step 1: Cleaning old images and building with Podman..."
-
-  # Remove ALL existing fintech-tools images (any tag) and their dependent
-  # containers — this prevents images accumulating across rebuilds.
-  # Build-layer cache (intermediate layers) is pruned afterwards so dangling
-  # blobs from the previous build don't linger on disk.
-  purge_old_images() {
-    local old_ids
-    old_ids=$(podman images --format "{{.ID}} {{.Repository}}:{{.Tag}}" 2>/dev/null \
-      | grep -E "(localhost/)?${IMAGE_NAME}" | awk '{print $1}' | sort -u)
-    if [ -n "$old_ids" ]; then
-      print_status "Removing existing ${IMAGE_NAME} image(s)..."
-      for id in $old_ids; do
-        cleanup_containers_using_image "$id" 2>/dev/null || true
-        podman image rm -f "$id" 2>/dev/null && \
-          print_success "✓ Removed image ${id}" || true
-      done
-    fi
-    # Prune dangling intermediate layers left over from the previous build.
-    local dangling
-    dangling=$(podman images -f dangling=true -q 2>/dev/null)
-    if [ -n "$dangling" ]; then
-      print_status "Pruning dangling intermediate layers..."
-      podman image prune -f >/dev/null 2>&1 && \
-        print_success "✓ Dangling layers pruned" || true
-    fi
-  }
-
   purge_old_images
 
   echo "Command: podman build --platform linux/amd64 -t ${IMAGE_NAME}:${VERSION} ."
