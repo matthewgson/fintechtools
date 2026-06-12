@@ -1,8 +1,8 @@
-# FinTech Tools Container — v0.9
+# FinTech Tools Container — v1.0
 
-HPC container for Financial / Quantitative computing. Built on macOS with Podman, converted to
-Singularity/Apptainer, deployed to CIRCE. Workflow has migrated from VSCode
-Remote-SSH (legacy, still works) to **Neovim** SSH.
+HPC container for Financial / Quantitative computing. Built on macOS with Podman,
+exported as a flat rootfs tar and deployed to CIRCE. Workflow has migrated
+from VSCode Remote-SSH (legacy, still works) to **Neovim** SSH.
 
 ## Build
 
@@ -10,8 +10,8 @@ Remote-SSH (legacy, still works) to **Neovim** SSH.
 ./build_container.sh
 ```
 
-Does it all: builds with Podman → saves tar → converts to `.sif` inside the
-Podman VM toolbox → optional `scp` to CIRCE (`gson@circe.rc.usf.edu:~/containers/`).
+Does it all: builds with Podman → `podman export` to a flat rootfs tar →
+optional `scp` to CIRCE (`/work/g/gson/fintech-rootfs.tar`).
 Pushover notifications fire if `~/.pushover_config` is set.
 
 Prereqs (one-time):
@@ -19,8 +19,25 @@ Prereqs (one-time):
 ```bash
 brew install podman
 podman machine init && podman machine start
-podman machine ssh -- "sudo dnf install -y toolbox && toolbox create && toolbox run sudo dnf install -y apptainer"
 ```
+
+## Running on CIRCE (post-2026 maintenance)
+
+Singularity/Apptainer can no longer start containers on CIRCE compute nodes
+(`/apps` is `nosuid` and user namespaces are disabled). The same unmodified
+image runs via a userspace launcher that needs neither, reading the rootfs tar
+produced by the build.
+
+One-time setup (the build script deploys the rootfs tar automatically):
+
+```bash
+scp term_session.sh circe:~/bin/ && ssh circe 'chmod +x ~/bin/term_session.sh'
+```
+
+Daily use: `sbatch ~/sh/term_session.sh`, then `./connect_nvim.sh` from the Mac.
+The launcher extracts the rootfs to node-local `/tmp` and enters the container.
+After a rebuild, clear an already-extracted node's sandbox to pick up the
+new image: `rm -rf /tmp/$USER/fintech-sbx`.
 
 ## What's inside (v0.9)
 
@@ -36,12 +53,12 @@ podman machine ssh -- "sudo dnf install -y toolbox && toolbox create && toolbox 
 | LazyVim extras | `ai.copilot`, `lang.html`, `lang.python`, plus git/json/markdown/yaml/toml |
 | Terminal | Zellij (multiplexer), Yazi (file manager) with all recommended deps, lazygit, `ncurses-term` (many terminfos) |
 | AI CLIs | `copilot` (GitHub Copilot standalone CLI) + `claude` (Anthropic Claude Code) |
-| SSH | `openssh-server`, port 2222 (legacy VSCode remote still supported) |
+| SSH | `openssh-client` (git/scp); sshd not used |
 | mac-open | `/usr/local/bin/mac-open` — pure-Python client that ships files/URLs to a listener on the Mac (see "mac-open" below). VimTeX's PDF viewer (`<localleader>lv`) is routed through it by `configs/nvim/lua/plugins/vimtex.lua`. |
 
 Yazi deps included (per [yazi docs](https://yazi-rs.github.io/docs/installation)):
-`file`, `ffmpeg`, `p7zip`, `jq`, `poppler-utils`, `fd`, `ripgrep`, `fzf`,
-`zoxide`, `imagemagick`, `xclip`, `resvg`, `unar`.
+`file`, `p7zip`, `jq`, `poppler-utils`, `fd`, `ripgrep`, `fzf`,
+`zoxide`, `imagemagick`, `resvg`, `unar`.
 
 ```
 
@@ -109,7 +126,7 @@ the container's `localhost:8765` is the Mac's loopback.
 |---|---|---|
 | `yazi` | **replace** — repo's `configs/yazi/` becomes CIRCE's `~/.config/yazi/` | Container needs `mac-open` opener; Mac uses the native `open` command |
 | `nvim` | **overlay** — Mac's `~/.config/nvim/` is staged, then `configs/nvim/*` is rsync'd on top | Keeps your Mac LazyVim config canonical; just drops in the `mac_open.lua` plugin |
-| `avante.nvim`, `github-copilot`, `htop`, `zellij` | **mac-only** — direct from Mac | No container-specific overrides needed |
+| `avante.nvim`, `github-copilot`, `btm`, `zellij` | **mac-only** — direct from Mac | No container-specific overrides needed |
 
 To add another override: drop files into `configs/<cfg>/` and (if needed) add
 the cfg name to the `replace`/`overlay` case in `build_container.sh:execute_all_transfers`.
@@ -120,7 +137,7 @@ After SSH'ing in via `./connect_nvim.sh` (with the Mac listener running):
 
 ```bash
 mac-open https://example.com           # browser pops up on Mac
-mac-open /work_bgfs/g/gson/some.pdf    # PDF opens on Mac
+mac-open /work/g/gson/some.pdf    # PDF opens on Mac
 ```
 
 In yazi: hit `o` on a `.pdf`/`.html`/image → routes through `mac-open`.
