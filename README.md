@@ -1,7 +1,6 @@
-# FinTech Tools Container — v1.0
+# FinTech Tools Container — v0.7
 
-HPC container for Financial / Quantitative computing. Built on macOS with Podman,
-exported as a flat rootfs tar and deployed to CIRCE. Workflow has migrated
+HPC container for Financial / Quantitative computing. Workflow has migrated
 from VSCode Remote-SSH (legacy, still works) to **Neovim** SSH.
 
 ## Build
@@ -21,12 +20,7 @@ brew install podman
 podman machine init && podman machine start
 ```
 
-## Running on CIRCE (post-2026 maintenance)
-
-Singularity/Apptainer can no longer start containers on CIRCE compute nodes
-(`/apps` is `nosuid` and user namespaces are disabled). The same unmodified
-image runs via a userspace launcher that needs neither, reading the rootfs tar
-produced by the build.
+## Running on CIRCE
 
 One-time setup (the build script deploys the rootfs tar automatically):
 

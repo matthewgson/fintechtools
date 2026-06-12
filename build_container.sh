@@ -1,18 +1,21 @@
 #!/bin/bash
 
 # FinTech Tools Container Build Script
-# Follows the exact workflow described in README.md
+# Build (Podman) -> export flat rootfs tar (podman export) -> scp to CIRCE.
 
 set -e # Exit on any error
 
 # Configuration
 IMAGE_NAME="fintech-tools"
-VERSION="0.9" # v0.9: + TinyTeX (LaTeX) baked in at /opt/TinyTeX for VimTeX / Quarto PDF
-TAR_FILE="$HOME/fintech-tools.tar"
-SIF_FILE="fintech-tools.sif"
+VERSION="0.7"
+# Flat rootfs tar produced by `podman export` — deployed to CIRCE.
+ROOTFS_TAR="$HOME/fintech-rootfs.tar"
 REMOTE_USER="gson"
 REMOTE_HOST="circe.rc.usf.edu"
-REMOTE_PATH="~/containers/"
+# Rootfs tar destination on CIRCE.
+# /work is persistent and is the only large FS mounted on compute nodes.
+REMOTE_ROOTFS_DIR="/work/g/${REMOTE_USER}/container-sb"
+REMOTE_ROOTFS_PATH="${REMOTE_ROOTFS_DIR}/fintech-rootfs.tar"
 
 # Colors for output
 RED='\033[0;31m'
@@ -128,15 +131,6 @@ send_pushover_notification() {
   else
     print_warning "Failed to send notification: $response"
     return 1
-  fi
-}
-
-# Check if we're in Podman VM environment
-check_podman_vm() {
-  if [ -d "/Users" ] && [ -d "/var/home" ]; then
-    return 0 # We're in Podman VM (virtiofs mounts Mac /Users at /Users)
-  else
-    return 1 # We're not in Podman VM
   fi
 }
 
@@ -263,96 +257,69 @@ main() {
   # A single SSH mux is opened later — one password prompt covers everything.
   collect_transfer_decisions
 
-  # Step 1: Clean existing image and build Docker Image with Podman
-  print_status "Step 1: Checking for existing images and building Docker image with Podman..."
+  # Step 1: Clean any existing image, then build
+  print_status "Step 1: Cleaning old images and building with Podman..."
 
-  # Check if image exists and handle it properly
-  DO_BUILD=1 # 1 = build, 0 = skip
-
-  if podman images --format "{{.Repository}}:{{.Tag}}" 2>/dev/null | grep -qE "^(localhost/)?${IMAGE_NAME}:${VERSION}$"; then
-    print_warning "Existing image found: ${IMAGE_NAME}:${VERSION}"
-
-    # Show image details
-    print_status "Current image details:"
-    podman images "localhost/${IMAGE_NAME}:${VERSION}" --format "table {{.Repository}}:{{.Tag}}  {{.Created}}  {{.Size}}"
-
-    echo
-    read -r -p "Do you want to rebuild the image? (y/N): " REBUILD_ANSWER </dev/tty
-    echo
-
-    case "${REBUILD_ANSWER}" in
-    [yY] | [yY][eE][sS])
-      print_status "Rebuilding image: ${IMAGE_NAME}:${VERSION}"
-
-      # Check and clean up any containers using this image
-      cleanup_containers_using_image "${IMAGE_NAME}:${VERSION}"
-
-      # Remove the image
-      if podman image rm -f "localhost/${IMAGE_NAME}:${VERSION}"; then
-        print_success "✓ Existing image removed successfully"
-      else
-        print_error "Failed to remove existing image."
-        print_status "This might be due to:"
-        echo "  1. Containers still using the image (check: podman ps -a)"
-        echo "  2. Image being used by other processes"
-        echo "  3. Permission issues"
-        exit 1
-      fi
-      ;;
-    *)
-      print_status "Keeping existing image. Skipping build — proceeding to next steps."
-      DO_BUILD=0
-      ;;
-    esac
-  else
-    print_status "No existing image found. Proceeding with fresh build."
-  fi
-
-  if [ "${DO_BUILD}" -eq 1 ]; then
-    echo "Command: podman build --platform linux/amd64 -t ${IMAGE_NAME}:${VERSION} ."
-    start_timer
-
-    if podman build --platform linux/amd64 -t "${IMAGE_NAME}:${VERSION}" .; then
-      end_timer "Docker image build"
-      send_pushover_notification "✅ Docker Build Complete" "FinTech Tools Docker image built successfully (${IMAGE_NAME}:${VERSION})"
-    else
-      print_error "Failed to build Docker image"
-      send_pushover_notification "❌ Build Failed" "Docker image build failed. Check logs for details."
-      exit 1
+  # Remove ALL existing fintech-tools images (any tag) and their dependent
+  # containers — this prevents images accumulating across rebuilds.
+  # Build-layer cache (intermediate layers) is pruned afterwards so dangling
+  # blobs from the previous build don't linger on disk.
+  purge_old_images() {
+    local old_ids
+    old_ids=$(podman images --format "{{.ID}} {{.Repository}}:{{.Tag}}" 2>/dev/null \
+      | grep -E "(localhost/)?${IMAGE_NAME}" | awk '{print $1}' | sort -u)
+    if [ -n "$old_ids" ]; then
+      print_status "Removing existing ${IMAGE_NAME} image(s)..."
+      for id in $old_ids; do
+        cleanup_containers_using_image "$id" 2>/dev/null || true
+        podman image rm -f "$id" 2>/dev/null && \
+          print_success "✓ Removed image ${id}" || true
+      done
     fi
-  fi
+    # Prune dangling intermediate layers left over from the previous build.
+    local dangling
+    dangling=$(podman images -f dangling=true -q 2>/dev/null)
+    if [ -n "$dangling" ]; then
+      print_status "Pruning dangling intermediate layers..."
+      podman image prune -f >/dev/null 2>&1 && \
+        print_success "✓ Dangling layers pruned" || true
+    fi
+  }
 
-  # Step 2: Save image as tar file (from README Step 1)
-  print_status "Saving image as tar file..."
-  echo "Command: podman save -o ${TAR_FILE} localhost/${IMAGE_NAME}:${VERSION}"
+  purge_old_images
+
+  echo "Command: podman build --platform linux/amd64 -t ${IMAGE_NAME}:${VERSION} ."
   start_timer
 
-  podman save -o "${TAR_FILE}" "localhost/${IMAGE_NAME}:${VERSION}"
-
-  if [ $? -eq 0 ]; then
-    print_status "Tar file size: $(du -h "${TAR_FILE}" | cut -f1)"
-    end_timer "Image save to tar"
+  if podman build --platform linux/amd64 -t "${IMAGE_NAME}:${VERSION}" .; then
+    end_timer "Docker image build"
+    send_pushover_notification "✅ Docker Build Complete" "FinTech Tools Docker image built successfully (${IMAGE_NAME}:${VERSION})"
   else
-    print_error "Failed to save image as tar file"
+    print_error "Failed to build Docker image"
+    send_pushover_notification "❌ Build Failed" "Docker image build failed. Check logs for details."
     exit 1
   fi
 
-  # Step 3: Automatically enter Podman VM and convert (from README Step 2)
-  print_status "Step 3: Container conversion to Singularity format..."
+  # Step 2: Export the image's flat filesystem as a rootfs tar.
+  # We need a plain rootfs tar — NOT `podman save`, which is a layered image
+  # archive. We make a throwaway container from the image, export its /, remove
+  # it. No Singularity/apptainer, no Podman-VM toolbox — pure podman.
+  print_status "Step 2: Exporting rootfs tar..."
   start_timer
+  export_rootfs_tar
+  end_timer "Rootfs export"
 
-  if check_podman_vm; then
-    convert_in_podman_vm
-  else
-    print_status "Entering Podman VM and toolbox for conversion..."
-    auto_convert_via_podman_vm
-  fi
+  # Post-export: remove the image and prune dangling layers so podman storage
+  # returns to baseline. Only the rootfs tar is needed going forward.
+  print_status "Cleaning up: removing built image to free disk space..."
+  podman image rm -f "localhost/${IMAGE_NAME}:${VERSION}" 2>/dev/null && \
+    print_success "✓ Built image removed" || true
+  podman image prune -f >/dev/null 2>&1 && \
+    print_success "✓ Intermediate build layers pruned" || true
 
-  end_timer "Singularity conversion"
-
-  # Step 4: HPC deployment — one SSH mux, all transfers in a single batch
+  # Step 3: HPC deployment — one SSH mux, all transfers in a single batch
   # (decisions were already collected at startup; no interactive prompts here)
-  print_status "Step 4: HPC deployment..."
+  print_status "Step 3: HPC deployment..."
   setup_ssh_mux
   start_timer
   execute_all_transfers
@@ -376,140 +343,34 @@ main() {
   send_pushover_notification "🎉 Build Complete" "FinTech Tools container build completed successfully in $(format_total_time $TOTAL_ELAPSED)"
 }
 
-# Convert to Singularity in Podman VM environment (README Step 2)
-convert_in_podman_vm() {
-  print_status "Converting to Singularity format in Podman VM..."
-
-  # Set up build directory (following README exactly)
-  BUILD_DIR="$HOME/apptainer-builds"
-  print_status "Setting up build directory: ${BUILD_DIR}"
-  mkdir -p "$BUILD_DIR"
-  export APPTAINER_TMPDIR="$BUILD_DIR"
-
-  # Add to bashrc as per README
-  if ! grep -q "APPTAINER_TMPDIR" ~/.bashrc; then
-    echo 'export APPTAINER_TMPDIR=~/apptainer-builds' >>~/.bashrc
-    print_status "Added APPTAINER_TMPDIR to ~/.bashrc"
-  fi
-
-  # Check if we have apptainer
-  if ! command_exists apptainer; then
-    print_error "Apptainer not found in Podman VM."
+# Export the image's flat root filesystem as a tar the launcher can extract.
+# `podman create` makes a container (its rootfs == the image content); `podman
+# export` dumps that filesystem as a plain tar. No emulation runs, so the amd64
+# binaries are exported as-is even on an arm64 Mac. The throwaway container is
+# removed afterwards.
+export_rootfs_tar() {
+  local cid
+  print_status "Creating throwaway container from ${IMAGE_NAME}:${VERSION}..."
+  cid=$(podman create --platform linux/amd64 "localhost/${IMAGE_NAME}:${VERSION}" /bin/true) || {
+    print_error "podman create failed"
     exit 1
-  fi
+  }
 
-  # Navigate to Mac home directory (mounted via virtiofs at same path in VM)
-  MAC_USER=$(ls /Users/ | head -1)
-  if [ -d "/Users/$MAC_USER" ]; then
-    cd "/Users/$MAC_USER"
-    print_status "Changed to /Users/$MAC_USER"
-  fi
-
-  # Convert following README command exactly
-  print_status "Converting Docker archive to Singularity image..."
-  echo "Command: apptainer build --force --arch amd64 ${SIF_FILE} docker-archive://${TAR_FILE}"
-
-  apptainer build --force --arch amd64 "${SIF_FILE}" "docker-archive://${TAR_FILE}"
-
-  if [ $? -eq 0 ]; then
-    print_status "SIF file size: $(du -h "${SIF_FILE}" | cut -f1)"
-    print_success "Singularity image created: ${SIF_FILE}"
+  print_status "Exporting container filesystem to rootfs tar..."
+  echo "Command: podman export ${cid} -o ${ROOTFS_TAR}"
+  if podman export "${cid}" -o "${ROOTFS_TAR}"; then
+    print_status "Rootfs tar size: $(du -h "${ROOTFS_TAR}" | cut -f1)"
+    print_success "✓ Rootfs tar created: ${ROOTFS_TAR}"
+    podman rm -f "${cid}" >/dev/null 2>&1 || true
   else
-    print_error "Failed to convert to Singularity format"
-    exit 1
-  fi
-}
-
-# Automatically enter Podman VM and run apptainer conversion
-auto_convert_via_podman_vm() {
-  print_status "Entering Podman VM for apptainer conversion..."
-  print_status "Using automatic conversion method..."
-
-  # Create a temporary script that will run inside the Podman VM.
-  # Use __MAC_HOME__ as a placeholder; sed replaces it with the real Mac $HOME
-  # before the script is copied to disk (virtiofs mounts Mac /Users at /Users in the VM).
-  TEMP_SCRIPT=$(mktemp)
-  cat >"$TEMP_SCRIPT" <<'EOF'
-#!/bin/bash
-
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
-print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-
-SIF_FILE="fintech-tools.sif"
-MAC_HOME="__MAC_HOME__"
-HOST_TAR_FILE="$MAC_HOME/fintech-tools.tar"
-
-# Set up apptainer tmp dir
-BUILD_DIR="$HOME/apptainer-builds"
-mkdir -p "$BUILD_DIR"
-export APPTAINER_TMPDIR="$BUILD_DIR"
-
-if ! command -v apptainer >/dev/null 2>&1; then
-    print_error "Apptainer not found in Podman VM"
-    exit 1
-fi
-
-if [ ! -f "$HOST_TAR_FILE" ]; then
-    print_error "TAR file not found at $HOST_TAR_FILE"
-    ls -la "$MAC_HOME"/*.tar 2>/dev/null || echo "No .tar files found"
-    exit 1
-fi
-
-# Build SIF directly into the Mac home directory
-cd "$MAC_HOME" || { print_error "Cannot cd to $MAC_HOME"; exit 1; }
-
-print_status "Found TAR file: $HOST_TAR_FILE"
-print_status "Converting Docker archive to Singularity image..."
-echo "Command: apptainer build --force --arch amd64 $SIF_FILE docker-archive://$HOST_TAR_FILE"
-
-if apptainer build --force --arch amd64 "$SIF_FILE" "docker-archive://$HOST_TAR_FILE"; then
-    print_success "Singularity image created: $MAC_HOME/$SIF_FILE"
-    print_status "SIF file size: $(du -h "$SIF_FILE" | cut -f1)"
-else
-    print_error "Failed to convert to Singularity format"
-    exit 1
-fi
-EOF
-
-  # Inject the actual Mac home path (virtiofs mounts it at the same path in the VM)
-  sed -i '' "s|__MAC_HOME__|${HOME}|g" "$TEMP_SCRIPT"
-  chmod +x "$TEMP_SCRIPT"
-
-  SCRIPT_NAME="convert_to_sif.sh"
-  cp "$TEMP_SCRIPT" "$HOME/$SCRIPT_NAME"
-
-  print_status "Created conversion script: $HOME/$SCRIPT_NAME"
-  print_status "SSHing into Podman VM and running apptainer conversion..."
-
-  # Mac's /Users is mounted at /Users in the Podman VM via virtiofs
-  podman machine ssh -- "bash /Users/$(whoami)/$SCRIPT_NAME"
-
-  CONVERSION_EXIT_CODE=$?
-
-  # Clean up temporary files
-  rm -f "$TEMP_SCRIPT" "$HOME/$SCRIPT_NAME"
-
-  if [ $CONVERSION_EXIT_CODE -eq 0 ]; then
-    print_success "Conversion completed successfully!"
-    if [ -f "$HOME/$SIF_FILE" ]; then
-      print_success "SIF file ready: $HOME/$SIF_FILE"
-      SIF_FILE="$HOME/$SIF_FILE"
-    fi
-  else
-    print_error "Conversion failed in Podman VM"
-    print_status "Check that $HOME/fintech-tools.tar exists and Podman VM is running."
+    print_error "podman export failed"
+    podman rm -f "${cid}" >/dev/null 2>&1 || true
     exit 1
   fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PHASE 1 — Gather SIF deployment decision BEFORE touching SSH.
+# PHASE 1 — Gather rootfs-tar deployment decision BEFORE touching SSH.
 # Called at startup so the user answers once and the build runs unattended.
 # Config/script syncing lives in sync_configs.sh (separate lightweight script).
 # ─────────────────────────────────────────────────────────────────────────────
@@ -517,20 +378,20 @@ collect_transfer_decisions() {
   echo
   echo "============================================================"
   print_status "Deployment decision — answer now, then build runs unattended"
-  print_status "SIF transfer will reuse ONE SSH connection after the build"
+  print_status "Rootfs-tar transfer will reuse ONE SSH connection after the build"
   echo "============================================================"
   echo
 
-  # ── SIF ──────────────────────────────────────────────────────────────────────
-  XFER_SIF=0
-  read -r -p "Transfer ${SIF_FILE} to CIRCE ${REMOTE_PATH} after build? (y/N): " _r </dev/tty; echo
-  [[ $_r =~ ^[Yy]$ ]] && XFER_SIF=1
+  # ── rootfs tar ───────────────────────────────────────────────────────────────
+  XFER_ROOTFS=0
+  read -r -p "Transfer rootfs tar to CIRCE ${REMOTE_ROOTFS_PATH} after build? (y/N): " _r </dev/tty; echo
+  [[ $_r =~ ^[Yy]$ ]] && XFER_ROOTFS=1
 
   echo "============================================================"
-  if [ "${XFER_SIF:-0}" -eq 1 ]; then
-    print_status "Will deploy after build: SIF → CIRCE ${REMOTE_PATH}"
+  if [ "${XFER_ROOTFS:-0}" -eq 1 ]; then
+    print_status "Will deploy after build: rootfs tar → CIRCE ${REMOTE_ROOTFS_PATH}"
   else
-    print_status "No deployment selected — SIF transfer will be skipped"
+    print_status "No deployment selected — rootfs-tar transfer will be skipped"
   fi
   print_status "To sync configs/scripts separately, run: ./sync_configs.sh"
   echo "============================================================"
@@ -538,39 +399,41 @@ collect_transfer_decisions() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PHASE 2 — Execute SIF transfer using a single SSH mux.
+# PHASE 2 — Execute rootfs-tar transfer using a single SSH mux.
 # Config/script syncing lives in sync_configs.sh (separate lightweight script).
 # ─────────────────────────────────────────────────────────────────────────────
 execute_all_transfers() {
   local -a MUX=()
   [ -n "$SSH_CONTROL_SOCKET" ] && MUX=(-o ControlMaster=auto -o ControlPath="${SSH_CONTROL_SOCKET}")
 
-  if [ "${XFER_SIF:-0}" -eq 0 ]; then
-    print_status "SIF transfer skipped. Run ./sync_configs.sh to push configs."
+  if [ "${XFER_ROOTFS:-0}" -eq 0 ]; then
+    print_status "Rootfs-tar transfer skipped. Run ./sync_configs.sh to push configs."
     return 0
   fi
 
-  # ── Remote: SIF (large file — dedicated scp, same mux) ───────────────────────
-  if [ ! -f "$SIF_FILE" ]; then
-    print_warning "SIF file ${SIF_FILE} not found — skipping"
+  # ── Remote: rootfs tar (large file — dedicated scp, same mux) ────────────────
+  if [ ! -f "$ROOTFS_TAR" ]; then
+    print_warning "Rootfs tar ${ROOTFS_TAR} not found — skipping"
     return 0
   fi
 
   echo
-  print_status "Transferring ${SIF_FILE} to ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}..."
-  send_pushover_notification "🔐 Transfer Starting" "Beginning SIF transfer to CIRCE."
-  echo "Command: scp ${SIF_FILE} ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
+  print_status "Transferring rootfs tar to ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_ROOTFS_PATH}..."
+  send_pushover_notification "🔐 Transfer Starting" "Beginning rootfs-tar transfer to CIRCE."
+  echo "Command: scp ${ROOTFS_TAR} ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_ROOTFS_PATH}"
   local _ts _te _tt
   _ts=$(date +%s)
-  ssh "${MUX[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p ${REMOTE_PATH}" 2>/dev/null
-  if scp "${MUX[@]}" "${SIF_FILE}" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"; then
+  ssh "${MUX[@]}" "${REMOTE_USER}@${REMOTE_HOST}" "mkdir -p ${REMOTE_ROOTFS_DIR}" 2>/dev/null
+  if scp "${MUX[@]}" "${ROOTFS_TAR}" "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_ROOTFS_PATH}"; then
     _te=$(date +%s); _tt=$((_te - _ts))
-    print_success "✓ SIF transferred to CIRCE in ${_tt}s"
-    send_pushover_notification "✅ Transfer Complete" "SIF transferred to CIRCE in ${_tt}s."
+    print_success "✓ Rootfs tar transferred to CIRCE in ${_tt}s"
+    send_pushover_notification "✅ Transfer Complete" "Rootfs tar transferred to CIRCE in ${_tt}s."
+    print_status "On a fresh node it extracts automatically; to refresh an already-extracted"
+    print_status "node, clear its sandbox: rm -rf /tmp/\$USER/fintech-sbx"
   else
-    print_error "Failed to transfer SIF to CIRCE"
-    send_pushover_notification "❌ Transfer Failed" "SIF transfer failed. Manual: scp ${SIF_FILE} ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
-    print_status "Manual transfer: scp ${SIF_FILE} ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}"
+    print_error "Failed to transfer rootfs tar to CIRCE"
+    send_pushover_notification "❌ Transfer Failed" "Rootfs-tar transfer failed. Manual: scp ${ROOTFS_TAR} ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_ROOTFS_PATH}"
+    print_status "Manual transfer: scp ${ROOTFS_TAR} ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_ROOTFS_PATH}"
   fi
 }
 
@@ -578,11 +441,11 @@ execute_all_transfers() {
 usage() {
   echo "Usage: $0 [OPTIONS]"
   echo
-  echo "This script follows the exact workflow from README.md:"
-  echo "  1. Build Docker image with Podman"
-  echo "  2. Save image as tar file"
-  echo "  3. Convert to Singularity format via Podman VM + toolbox"
-  echo "  4. Transfer SIF to CIRCE HPC (optional)"
+  echo "Workflow:"
+  echo "  1. Build Docker image with Podman (cleans old images first)"
+  echo "  2. Export flat rootfs tar with 'podman export'"
+  echo "  3. Remove built image + prune dangling layers (disk cleanup)"
+  echo "  4. Transfer rootfs tar to CIRCE ${REMOTE_ROOTFS_PATH} (optional)"
   echo
   echo "To sync configs/scripts to CIRCE without rebuilding, use:"
   echo "  ./sync_configs.sh"
@@ -592,15 +455,11 @@ usage() {
   echo "  -v, --version  Set version tag (default: ${VERSION})"
   echo
   echo "System Requirements:"
-  echo "  - macOS with Podman installed and running"
-  echo "  - Podman VM with toolbox environment"
-  echo "  - Apptainer installed in toolbox"
-  echo "  - Commands: podman machine ssh && toolbox enter"
+  echo "  - macOS with Podman installed and running (no apptainer/toolbox needed)"
   echo
   echo "Setup Instructions:"
   echo "  brew install podman"
   echo "  podman machine init && podman machine start"
-  echo "  podman machine ssh -- 'toolbox create && toolbox run sudo dnf install -y apptainer'"
 }
 
 # Parse command line arguments

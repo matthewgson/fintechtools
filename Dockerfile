@@ -4,7 +4,7 @@ FROM ubuntu:24.04
 
 LABEL maintainer="Matthew Son"
 LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Copilot CLI + TinyTeX"
-LABEL version="1.0"
+LABEL version="0.7"
 
 # ─── Version pins — bump here to upgrade any tool ────────────────────────────
 ARG UV_VERSION=0.11.21
