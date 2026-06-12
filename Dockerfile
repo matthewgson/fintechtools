@@ -4,17 +4,30 @@ FROM ubuntu:24.04
 
 LABEL maintainer="Matthew Son"
 LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Copilot CLI + TinyTeX"
-LABEL version="0.9"
+LABEL version="1.0"
+
+# ─── Version pins — bump here to upgrade any tool ────────────────────────────
+ARG UV_VERSION=0.11.21
+ARG QUARTO_VERSION=1.9.38
+ARG TINYTEX_TAG=v2026.06
+ARG NVIM_VERSION=v0.12.3
+ARG LAZYGIT_VERSION=0.62.2
+ARG YAZI_VERSION=v26.5.6
+ARG RESVG_VERSION=0.47.0
+ARG FZF_VERSION=0.73.1
+ARG ZOXIDE_VERSION=0.9.9
+ARG ZELLIJ_VERSION=0.44.3
+ARG BOTTOM_VERSION=0.12.3
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/New_York
 ENV LC_ALL=C.UTF-8
 ENV LANG=C.UTF-8
 
-# Singularity library path (preserved for HPC GPU passthrough compatibility)
+# Singularity library path (preserved for HPC compatibility)
 ENV LD_LIBRARY_PATH="/.singularity.d/libs:$LD_LIBRARY_PATH"
 
-WORKDIR /work_bgfs/g/gson
+WORKDIR /work/g/gson
 
 # ─── Stage 0: Apt resilience ────────────────────────────────────────────────
 # Ubuntu's archive/security mirrors occasionally hand out an in-progress
@@ -48,9 +61,6 @@ RUN apt-get update && \
     libtool \
     # Java (H2O dependency)
     openjdk-21-jdk \
-    # Boost + system QuantLib headers (kept; RQuantLib source build itself is disabled below)
-    libboost-all-dev \
-    libquantlib0-dev \
     # Compression / networking
     libcurl4-openssl-dev \
     libssl-dev \
@@ -94,35 +104,26 @@ RUN apt-get update && \
     unzip \
     # Yazi required + recommended optional deps (per yazi-rs.github.io/docs/installation)
     file \
-    ffmpeg \
     p7zip-full \
     jq \
     poppler-utils \
     imagemagick \
-    xclip \
     unar \
     # Terminfo (ghostty + many others) for SSH terminal compatibility
     ncurses-term \
     # clear command
     ncurses-bin \
-    # process viewer
-    htop \
-    # Bootstrap node — replaced by NodeSource LTS in Stage 2
-    nodejs \
-    npm \
     # General utilities
     pandoc \
     git \
+    rsync \
     nano \
     vim \
-    htop \
     wget \
     curl \
-    sudo \
-    openssh-server \
+    openssh-client \
     man-db \
     less \
-    tmux \
     zsh && \
     locale-gen en_US.UTF-8 && \
     usermod -s /bin/zsh root && \
@@ -133,30 +134,6 @@ RUN apt-get update && \
 # container, install it once from your Mac:
 #   infocmp -x xterm-ghostty | ssh <ssh-target> -- tic -x -
 # (per https://ghostty.org/docs/help/terminfo). ncurses-term covers most others.
-
-# ─── Stage 1b: NVIDIA CUDA 12.3 runtime + utilities (Singularity --nv) ──────
-# ubuntu2404 only ships CUDA 12.5+; use ubuntu2204 packages (glibc-compatible).
-# cuda-compat-12-3  : driver forward-compat shim (libcuda.so stub)
-# cuda-cudart-12-3  : CUDA runtime (libcudart.so)
-# libcublas/cufft/curand/cusolver: common GPU compute libraries
-# nvidia-utils-545  : nvidia-smi (545 = minimum driver for CUDA 12.3)
-RUN curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
-        -o /tmp/cuda-keyring.deb && \
-    dpkg -i /tmp/cuda-keyring.deb && \
-    rm /tmp/cuda-keyring.deb && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-        cuda-compat-12-3 \
-        cuda-cudart-12-3 \
-        libcufft-12-3 \
-        libcublas-12-3 \
-        libcurand-12-3 \
-        libcusolver-12-3 \
-        nvidia-utils-545 && \
-    rm -rf /var/lib/apt/lists/*
-
-ENV PATH="/usr/local/cuda-12.3/bin:$PATH"
-ENV LD_LIBRARY_PATH="/usr/local/cuda-12.3/lib64:/.singularity.d/libs:$LD_LIBRARY_PATH"
 
 # ─── Stage 2: Node.js 24 LTS (for Mason / LSP servers) ──────────────────────
 RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
@@ -171,9 +148,7 @@ RUN add-apt-repository -y ppa:deadsnakes/ppa && \
     apt-get install -y \
         python3.13 \
         python3.13-dev \
-        python3.13-venv \
-        python3.13-full \
-        python3.13-tk && \
+        python3.13-venv && \
     rm -rf /var/lib/apt/lists/* && \
     ln -sf /usr/bin/python3.13 /usr/local/bin/python3 && \
     ln -sf /usr/bin/python3.13 /usr/local/bin/python && \
@@ -187,8 +162,7 @@ ENV RETICULATE_PYTHON=/usr/local/bin/python3
 ENV UV_PYTHON=/usr/local/bin/python3
 
 # ─── Stage 4: uv (Astral) — fast Python package + project manager ───────────
-RUN UV_VERSION=$(curl -s https://api.github.com/repos/astral-sh/uv/releases/latest \
-        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/') && \
+RUN UV_VERSION=${UV_VERSION} && \
     echo "Installing uv ${UV_VERSION}" && \
     curl -L "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" \
         -o /tmp/uv.tar.gz && \
@@ -203,18 +177,10 @@ RUN UV_VERSION=$(curl -s https://api.github.com/repos/astral-sh/uv/releases/late
 # tidyverse packages from source (libxml2, libcurl, libssl, libcairo2, libpng,
 # libjpeg, libtiff5, libfontconfig, libfreetype, libharfbuzz, libfribidi,
 # libgit2, libblas, liblapack) are already present from Stage 1.
-# The packages below cover the remaining tidyverse / spatial / crypto deps:
-#   libudunits2-dev  → units, terra, sf
-#   libgdal-dev      → sf, terra, rgdal
-#   libgeos-dev      → sf
-#   libproj-dev      → sf
+# The packages below cover the remaining tidyverse / crypto deps:
 #   libsodium-dev    → sodium, openssl
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        libudunits2-dev \
-        libgdal-dev \
-        libgeos-dev \
-        libproj-dev \
         libsodium-dev && \
     rm -rf /var/lib/apt/lists/* && \
     mkdir -p /etc/apt/keyrings && \
@@ -260,8 +226,7 @@ EOF
 # ─── Stage 5c: Quarto (scientific publishing — .qmd → PDF/HTML/Word) ────────
 # Quarto bundles its own pandoc and Deno runtime.  LaTeX for PDF output is
 # provided by Stage 5d (TinyTeX) below.
-RUN QUARTO_VERSION=$(curl -s https://api.github.com/repos/quarto-dev/quarto-cli/releases/latest \
-        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"v\([^"]*\)".*/\1/') && \
+RUN QUARTO_VERSION=${QUARTO_VERSION} && \
     echo "Installing Quarto ${QUARTO_VERSION}" && \
     curl -L "https://github.com/quarto-dev/quarto-cli/releases/download/v${QUARTO_VERSION}/quarto-${QUARTO_VERSION}-linux-amd64.tar.gz" \
         -o /tmp/quarto.tar.gz && \
@@ -302,8 +267,7 @@ RUN QUARTO_VERSION=$(curl -s https://api.github.com/repos/quarto-dev/quarto-cli/
 #   tlmgr --usermode install <pkg>
 # Or rebuild the container with the package appended to the tlmgr install line.
 RUN rm -rf /opt/TinyTeX && \
-    TINYTEX_TAG=$(curl -s https://api.github.com/repos/rstudio/tinytex-releases/releases/latest \
-        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/') && \
+    TINYTEX_TAG=${TINYTEX_TAG} && \
     echo "Installing TinyTeX ${TINYTEX_TAG} (default bundle, linux-x86_64)" && \
     curl -fL "https://github.com/rstudio/tinytex-releases/releases/download/${TINYTEX_TAG}/TinyTeX-linux-x86_64-${TINYTEX_TAG}.tar.xz" \
         -o /tmp/tinytex.tar.xz && \
@@ -321,9 +285,8 @@ RUN rm -rf /opt/TinyTeX && \
     /usr/local/bin/latexmk --version >/dev/null && \
     /usr/local/bin/pdflatex --version | head -1
 
-# ─── Stage 6: Neovim (latest stable binary, x86_64) ─────────────────────────
-RUN NVIM_VERSION=$(curl -s https://api.github.com/repos/neovim/neovim/releases/latest \
-        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/') && \
+# ─── Stage 6: Neovim (pinned stable binary, x86_64) ─────────────────────────
+RUN NVIM_VERSION=${NVIM_VERSION} && \
     echo "Installing Neovim ${NVIM_VERSION}" && \
     curl -L "https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/nvim-linux-x86_64.tar.gz" \
         -o /tmp/nvim.tar.gz && \
@@ -331,8 +294,7 @@ RUN NVIM_VERSION=$(curl -s https://api.github.com/repos/neovim/neovim/releases/l
     rm /tmp/nvim.tar.gz
 
 # ─── Stage 7: lazygit (LazyVim git UI) ──────────────────────────────────────
-RUN LAZYGIT_VERSION=$(curl -s https://api.github.com/repos/jesseduffield/lazygit/releases/latest \
-        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"v\([^"]*\)".*/\1/') && \
+RUN LAZYGIT_VERSION=${LAZYGIT_VERSION} && \
     echo "Installing lazygit ${LAZYGIT_VERSION}" && \
     curl -L "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_Linux_x86_64.tar.gz" \
         -o /tmp/lazygit.tar.gz && \
@@ -340,8 +302,7 @@ RUN LAZYGIT_VERSION=$(curl -s https://api.github.com/repos/jesseduffield/lazygit
     rm /tmp/lazygit.tar.gz
 
 # ─── Stage 8: Yazi terminal file manager ────────────────────────────────────
-RUN YAZI_VERSION=$(curl -s https://api.github.com/repos/sxyazi/yazi/releases/latest \
-        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/') && \
+RUN YAZI_VERSION=${YAZI_VERSION} && \
     echo "Installing Yazi ${YAZI_VERSION}" && \
     curl -L "https://github.com/sxyazi/yazi/releases/download/${YAZI_VERSION}/yazi-x86_64-unknown-linux-gnu.zip" \
         -o /tmp/yazi.zip && \
@@ -352,8 +313,7 @@ RUN YAZI_VERSION=$(curl -s https://api.github.com/repos/sxyazi/yazi/releases/lat
     rm -rf /tmp/yazi.zip /tmp/yazi_extracted
 
 # ─── Stage 8b: resvg (Yazi SVG preview) ─────────────────────────────────────
-RUN RESVG_VERSION=$(curl -s https://api.github.com/repos/linebender/resvg/releases/latest \
-        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"v\([^"]*\)".*/\1/') && \
+RUN RESVG_VERSION=${RESVG_VERSION} && \
     echo "Installing resvg ${RESVG_VERSION}" && \
     curl -L "https://github.com/linebender/resvg/releases/download/v${RESVG_VERSION}/resvg-linux-x86_64.tar.gz" \
         -o /tmp/resvg.tar.gz && \
@@ -361,21 +321,19 @@ RUN RESVG_VERSION=$(curl -s https://api.github.com/repos/linebender/resvg/releas
     chmod +x /usr/local/bin/resvg && \
     rm /tmp/resvg.tar.gz
 
-# ─── Stage 8c: fzf + zoxide (latest from GitHub) ────────────────────────────
+# ─── Stage 8c: fzf + zoxide (pinned from GitHub) ────────────────────────────
 # Install from GitHub releases instead of apt to guarantee the latest versions.
 # Yazi's `z` interactive jump (zoxide --interactive → fzf) requires up-to-date
 # binaries; the apt packages on Ubuntu 24.04 are ~2023 builds which can cause
 # silent failures with newer yazi builds.
-RUN FZF_VERSION=$(curl -s https://api.github.com/repos/junegunn/fzf/releases/latest \
-        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"v\?\([^"]*\)".*/\1/') && \
+RUN FZF_VERSION=${FZF_VERSION} && \
     echo "Installing fzf ${FZF_VERSION}" && \
     curl -L "https://github.com/junegunn/fzf/releases/download/v${FZF_VERSION}/fzf-${FZF_VERSION}-linux_amd64.tar.gz" \
         -o /tmp/fzf.tar.gz && \
     tar -C /usr/local/bin -xzf /tmp/fzf.tar.gz fzf && \
     chmod +x /usr/local/bin/fzf && \
     rm /tmp/fzf.tar.gz
-RUN ZOXIDE_VERSION=$(curl -s https://api.github.com/repos/ajeetdsouza/zoxide/releases/latest \
-        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"v\?\([^"]*\)".*/\1/') && \
+RUN ZOXIDE_VERSION=${ZOXIDE_VERSION} && \
     echo "Installing zoxide ${ZOXIDE_VERSION}" && \
     curl -L "https://github.com/ajeetdsouza/zoxide/releases/download/v${ZOXIDE_VERSION}/zoxide-${ZOXIDE_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
         -o /tmp/zoxide.tar.gz && \
@@ -391,9 +349,17 @@ RUN ZOXIDE_VERSION=$(curl -s https://api.github.com/repos/ajeetdsouza/zoxide/rel
 COPY mac_open.py /usr/local/bin/mac-open
 RUN chmod +x /usr/local/bin/mac-open
 
+# ─── Stage 8e: bottom (process/system monitor — replaces htop) ───────────────
+RUN BOTTOM_VERSION=${BOTTOM_VERSION} && \
+    echo "Installing bottom ${BOTTOM_VERSION}" && \
+    curl -L "https://github.com/ClementTsang/bottom/releases/download/${BOTTOM_VERSION}/bottom_x86_64-unknown-linux-gnu.tar.gz" \
+        -o /tmp/bottom.tar.gz && \
+    tar -C /usr/local/bin -xzf /tmp/bottom.tar.gz btm && \
+    chmod +x /usr/local/bin/btm && \
+    rm /tmp/bottom.tar.gz
+
 # ─── Stage 9: Zellij (terminal multiplexer) ─────────────────────────────────
-RUN ZELLIJ_VERSION=$(curl -s https://api.github.com/repos/zellij-org/zellij/releases/latest \
-        | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"v\([^"]*\)".*/\1/') && \
+RUN ZELLIJ_VERSION=${ZELLIJ_VERSION} && \
     echo "Installing Zellij ${ZELLIJ_VERSION}" && \
     curl -L "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-x86_64-unknown-linux-musl.tar.gz" \
         -o /tmp/zellij.tar.gz && \
@@ -440,7 +406,7 @@ RUN mkdir -p /opt/host-slurm/bin /opt/host-slurm/lib \
     useradd -r -M -s /sbin/nologin slurm 2>/dev/null || true && \
     for cmd in squeue sacct sbatch srun sinfo scancel scontrol salloc \
                sstat sprio sshare sreport sacctmgr sbcast sdiag sattach \
-               sgather sview sinfo sjstat; do \
+               sgather sview sjstat; do \
         printf '%s\n' \
             '#!/bin/sh' \
             '# Auto-generated wrapper: exec host SLURM binary with scoped LD_LIBRARY_PATH.' \
@@ -473,8 +439,7 @@ RUN curl -sS https://starship.rs/install.sh | sh -s -- --yes
 # build-time UID here is irrelevant for file access. We use the default (1000)
 # because rootless podman's user namespace can't map the HPC's high IDs
 # (UID 70230911, GIDs 663800067/663800106) — crun's setresuid/setgroups would fail.
-RUN useradd -m -s /bin/zsh gson && \
-    echo "gson ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+RUN useradd -m -s /bin/zsh gson
 
 # NOTE: LazyVim config is NOT bootstrapped here.
 # Singularity bind-mounts /home/g/gson → /home/gson at runtime, so anything
@@ -498,14 +463,14 @@ RUN ln -sf "$(which fdfind)" /usr/local/bin/fd 2>/dev/null || true && \
 # ──────────────────────────────────────────────────────────────────────────────
 # /etc/zsh/zshenv — sourced by EVERY zsh invocation (login, interactive,
 # non-interactive `zsh -c`, scripts).  We keep environment exports here so that
-# zellij/yazi/scp/tmux/etc. that spawn `zsh -c '…'` inherit the right env.
+# zellij/yazi/scp/etc. that spawn `zsh -c '…'` inherit the right env.
 # Aliases and interactive integrations go in /etc/zsh/zshrc.
 # ──────────────────────────────────────────────────────────────────────────────
 
 # ── container PATH (prepend so container binaries win over host copies) ──────
 # Singularity inherits the host PATH; be explicit so /usr/local/bin tools
 # (nvim, starship, lazygit, uv, …) are always found.
-export PATH="/usr/local/bin:/usr/local/cuda-12.3/bin:$HOME/.local/bin:$PATH"
+export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
 
 # ── TinyTeX user-mode binaries: prefer over system /opt/TinyTeX if present ───
 # The system install (Dockerfile Stage 5d) symlinks its binaries into
@@ -530,7 +495,7 @@ fi
 #   tlmgr --usermode install <pkg>   # installs into ~/texmf, no root needed
 export TEXMFHOME="${HOME}/texmf"
 
-# ── Make zsh the default for child shells (zellij, tmux, scripts) ────────────
+# ── Make zsh the default for child shells (zellij, scripts) ──────────────────
 # CIRCE's /etc/passwd sets login shell to bash, which is inherited via the
 # bind-mounted home.  Force SHELL=zsh inside the container so zellij and
 # other terminal multiplexers spawn zsh panes by default.
@@ -583,8 +548,8 @@ export EDITOR=nvim
 export VISUAL=nvim
 
 # ── Terminal color capability ─────────────────────────────────────────────────
-# Declare 24-bit color support explicitly so tools like yazi, bat, and delta
-# do not need to query the terminal via DA1/XTVERSION escape sequences.
+# Declare 24-bit color support explicitly so tools like yazi do not need to
+# query the terminal via DA1/XTVERSION escape sequences.
 # Without this, newer yazi probes the terminal at startup; the probe round-trips
 # through SSH + Singularity and times out, printing "Terminal response timeout".
 export COLORTERM=truecolor
