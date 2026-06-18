@@ -69,6 +69,7 @@ CONFIGS_DIR="${SCRIPT_DIR}/configs"
 
 HAVE_ZSHRC=0;    [ -f "${SCRIPT_DIR}/.zshrc" ]              && HAVE_ZSHRC=1
 HAVE_TERM=0;     [ -f "${SCRIPT_DIR}/term_session.sh" ]     && HAVE_TERM=1
+HAVE_PROOT=0;    [ -f "${SCRIPT_DIR}/proot_dev.sh" ]        && HAVE_PROOT=1
 HAVE_CONNECT=0;  [ -f "${SCRIPT_DIR}/connect_nvim.sh" ]     && HAVE_CONNECT=1
 HAVE_LISTENER=0; [ -f "${SCRIPT_DIR}/mac_open_listener.py" ] && HAVE_LISTENER=1
 
@@ -76,6 +77,7 @@ print_status "Will deploy:"
 echo "  • ~/.config/{$(IFS=,; echo "${CONFIG_LIST[*]}")} → CIRCE"
 [ "$HAVE_ZSHRC"    -eq 1 ] && echo "  • .zshrc → CIRCE ~/"
 [ "$HAVE_TERM"     -eq 1 ] && echo "  • term_session.sh → CIRCE ~/sh/"
+[ "$HAVE_PROOT"    -eq 1 ] && echo "  • proot_dev.sh → CIRCE ~/bin/"
 [ "$HAVE_CONNECT"  -eq 1 ] && echo "  • connect_nvim.sh → ~/  (local)"
 [ "$HAVE_LISTENER" -eq 1 ] && echo "  • mac_open_listener.py → ~/  (local)"
 echo
@@ -147,8 +149,18 @@ if [ "$HAVE_TERM" -eq 1 ]; then
   _staged+=("sh/term_session.sh")
 fi
 
+if [ "$HAVE_PROOT" -eq 1 ]; then
+  mkdir -p "$STAGING/bin"
+  cp "${SCRIPT_DIR}/proot_dev.sh" "$STAGING/bin/proot_dev.sh"
+  # term_session.sh and connect_nvim.sh exec ~/bin/proot_dev.sh and require it to
+  # be executable (term_session.sh hard-fails on a non-exec launcher). The repo
+  # copy isn't +x, so set it here before the perm-preserving rsync -a.
+  chmod +x "$STAGING/bin/proot_dev.sh"
+  _staged+=("bin/proot_dev.sh")
+fi
+
 # Pre-create remote dirs
-remote_ssh "mkdir -p ~/.config ~/sh" 2>/dev/null
+remote_ssh "mkdir -p ~/.config ~/sh ~/bin" 2>/dev/null
 
 # ONE rsync call for all remote files
 echo

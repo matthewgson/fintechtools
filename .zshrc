@@ -25,4 +25,11 @@ export STARSHIP_CONFIG="$HOME/.config/starship/starship.toml"
 eval "$(starship init zsh)"
 
 # fzf Integration
-source <(fzf --zsh)
+# Use command substitution (eval "$(...)") rather than process substitution
+# (source <(...)). Under proot the latter opens /proc/self/fd/NN, which proot
+# does not back with a real file — yielding
+#   .zshrc:source:NN: no such file or directory: /proc/self/fd/15
+# in every interactive shell (including each zellij pane). eval avoids the fd.
+if command -v fzf >/dev/null 2>&1; then
+  eval "$(fzf --zsh)"
+fi

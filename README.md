@@ -25,7 +25,7 @@ podman machine init && podman machine start
 One-time setup (the build script deploys the rootfs tar automatically):
 
 ```bash
-scp term_session.sh circe:~/bin/ && ssh circe 'chmod +x ~/bin/term_session.sh'
+./sync_configs.sh   # deploys term_session.sh → ~/sh/ and proot_dev.sh → ~/bin/ on CIRCE
 ```
 
 Daily use: `sbatch ~/sh/term_session.sh`, then `./connect_nvim.sh` from the Mac.

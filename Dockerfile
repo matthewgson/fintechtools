@@ -3,8 +3,8 @@
 FROM ubuntu:24.04
 
 LABEL maintainer="Matthew Son"
-LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Copilot CLI + TinyTeX"
-LABEL version="0.7"
+LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Copilot CLI + TinyTeX + sioyek"
+LABEL version="0.8"
 
 # ─── Version pins — bump here to upgrade any tool ────────────────────────────
 ARG UV_VERSION=0.11.21
@@ -18,6 +18,8 @@ ARG FZF_VERSION=0.73.1
 ARG ZOXIDE_VERSION=0.9.9
 ARG ZELLIJ_VERSION=0.44.3
 ARG BOTTOM_VERSION=0.12.3
+# sioyek = VimTeX's synctex-capable PDF viewer; pinned to match the Mac install.
+ARG SIOYEK_VERSION=v2.0.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/New_York
@@ -276,6 +278,11 @@ RUN rm -rf /opt/TinyTeX && \
     rm /tmp/tinytex.tar.xz && \
     /opt/TinyTeX/bin/x86_64-linux/tlmgr option sys_bin /usr/local/bin && \
     /opt/TinyTeX/bin/x86_64-linux/tlmgr path add && \
+    # The bundled tlmgr (texlive.infra) is often older than the revision on the
+    # repo (tlnet.yihui.org), and tlmgr then HARD-REFUSES every `install` with
+    # "tlmgr itself needs to be updated".  Self-update first so installs proceed.
+    # (gnupg from Stage 1 lets tlmgr verify the repo signature.)
+    /opt/TinyTeX/bin/x86_64-linux/tlmgr update --self && \
     /opt/TinyTeX/bin/x86_64-linux/tlmgr install \
         collection-latexrecommended \
         collection-fontsrecommended \
@@ -284,6 +291,106 @@ RUN rm -rf /opt/TinyTeX && \
     /opt/TinyTeX/bin/x86_64-linux/tlmgr path add && \
     /usr/local/bin/latexmk --version >/dev/null && \
     /usr/local/bin/pdflatex --version | head -1
+
+# ─── Stage 5e: sioyek + X11 runtime (VimTeX synctex viewer) ─────────────────
+# VimTeX's PDF viewer. Unlike the mac-open bridge (which ships a *copy* of the
+# PDF to the Mac and so cannot carry synctex), sioyek runs INSIDE this container
+# on the compute node and renders to the Mac's XQuartz over SSH X11 forwarding
+# (connect_nvim.sh adds -Y). Because nvim and sioyek are co-located, VimTeX's
+# forward search (<localleader>lv) AND inverse search (click the PDF to jump
+# nvim to the source line) work natively — no cross-machine protocol needed.
+#
+# Two parts:
+#   1. apt: the low-level X11 / xcb / OpenGL / xkbcommon runtime that even the
+#      bundled-Qt sioyek dlopens, plus squashfs-tools (to unpack the AppImage at
+#      build time, below) and xauth (so the container can read the SSH-forwarded
+#      X cookie). libxcb-cursor0 is harmless extra cover should upstream move to
+#      Qt6 later (this 2.0.0 build bundles Qt5).
+#   2. sioyek itself. Upstream ships ONLY an AppImage for Linux (both the
+#      "portable" and plain zips contain the same Sioyek-x86_64.AppImage), pinned
+#      to the same 2.0.0 the Mac runs. AppImages need FUSE to self-mount — which
+#      proot can't provide — and the amd64 runtime can't even exec under this
+#      emulated (arm64-host) build. So we DON'T run it: we compute the squashfs
+#      offset straight from the AppImage's ELF header and unsquashfs the payload.
+#      The unpacked binary (usr/bin/sioyek) self-locates its bundled Qt5 via
+#      RUNPATH=$ORIGIN/../lib and finds the xcb platform plugin via the adjacent
+#      usr/bin/qt.conf, so the PATH wrapper just execs it (xcb forced, MIT-SHM
+#      off for network X).
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libgl1 \
+        libegl1 \
+        libopengl0 \
+        libglx-mesa0 \
+        libx11-6 \
+        libx11-xcb1 \
+        libxcb1 \
+        libxcb-cursor0 \
+        libxcb-glx0 \
+        libxcb-icccm4 \
+        libxcb-image0 \
+        libxcb-keysyms1 \
+        libxcb-randr0 \
+        libxcb-render0 \
+        libxcb-render-util0 \
+        libxcb-shape0 \
+        libxcb-shm0 \
+        libxcb-sync1 \
+        libxcb-util1 \
+        libxcb-xfixes0 \
+        libxcb-xinerama0 \
+        libxcb-xkb1 \
+        libxkbcommon0 \
+        libxkbcommon-x11-0 \
+        libxrender1 \
+        libxext6 \
+        libxi6 \
+        libsm6 \
+        libice6 \
+        libdbus-1-3 \
+        libglib2.0-0 \
+        fontconfig \
+        fonts-dejavu-core \
+        squashfs-tools \
+        xauth && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN SIOYEK_VERSION=${SIOYEK_VERSION} && \
+    echo "Installing sioyek ${SIOYEK_VERSION} (AppImage payload via unsquashfs, no FUSE)" && \
+    curl -fL "https://github.com/ahrm/sioyek/releases/download/${SIOYEK_VERSION}/sioyek-release-linux-portable.zip" \
+        -o /tmp/sioyek.zip && \
+    mkdir -p /tmp/sioyek-zip && \
+    unzip -q /tmp/sioyek.zip -d /tmp/sioyek-zip && \
+    SIOYEK_AI="$(find /tmp/sioyek-zip -type f -name '*.AppImage' | head -1)" && \
+    { [ -n "$SIOYEK_AI" ] || { echo "ERROR: no .AppImage inside sioyek zip" >&2; exit 1; }; } && \
+    printf '%s\n' \
+        'import struct,sys' \
+        'd=open(sys.argv[1],"rb").read(64)' \
+        'shoff=struct.unpack_from("<Q",d,0x28)[0]' \
+        'shentsize=struct.unpack_from("<H",d,0x3a)[0]' \
+        'shnum=struct.unpack_from("<H",d,0x3c)[0]' \
+        'print(shoff+shentsize*shnum)' \
+        > /tmp/elf_end.py && \
+    SIOYEK_OFF="$(python3 /tmp/elf_end.py "$SIOYEK_AI")" && \
+    echo "sioyek AppImage squashfs offset: $SIOYEK_OFF" && \
+    mkdir -p /opt/sioyek && \
+    unsquashfs -f -d /opt/sioyek -o "$SIOYEK_OFF" "$SIOYEK_AI" && \
+    { [ -x /opt/sioyek/usr/bin/sioyek ] || { echo "ERROR: sioyek binary missing after unsquashfs" >&2; exit 1; }; } && \
+    rm -rf /tmp/sioyek.zip /tmp/sioyek-zip /tmp/elf_end.py && \
+    printf '%s\n' \
+        '#!/bin/sh' \
+        '# sioyek launch wrapper (Dockerfile Stage 5e).' \
+        '# Force the xcb platform and disable MIT-SHM (unavailable over network X /' \
+        '# XQuartz-via-SSH; otherwise Qt crashes or renders blank). The binary self-' \
+        '# locates its bundled Qt5 via RUNPATH ($ORIGIN/../lib) and usr/bin/qt.conf;' \
+        '# LD_LIBRARY_PATH is belt-and-suspenders.' \
+        'export QT_QPA_PLATFORM=xcb' \
+        'export QT_X11_NO_MITSHM=1' \
+        'export LD_LIBRARY_PATH="/opt/sioyek/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' \
+        'exec /opt/sioyek/usr/bin/sioyek "$@"' \
+        > /usr/local/bin/sioyek && \
+    chmod +x /usr/local/bin/sioyek && \
+    echo "sioyek installed -> /opt/sioyek/usr/bin/sioyek"
 
 # ─── Stage 6: Neovim (pinned stable binary, x86_64) ─────────────────────────
 RUN NVIM_VERSION=${NVIM_VERSION} && \

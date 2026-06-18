@@ -3,10 +3,11 @@
 # connect_nvim.sh — Mac-side script to reconnect to a running nvim_session on CIRCE.
 #
 # Usage:
-#   ./connect_nvim.sh          # auto-find job and connect
-#   ./connect_nvim.sh <node>   # connect directly to a known node
+#   ./connect_nvim.sh              # auto-find job and connect (no X11)
+#   ./connect_nvim.sh <node>       # connect directly to a known node
+#   WITH_X11=1 ./connect_nvim.sh   # also launch XQuartz + ssh -Y for VimTeX \lv
 #
-# Drops into an interactive zsh inside the Singularity container.
+# Drops into an interactive zsh inside the container (launched via proot).
 # Start zellij/nvim manually from there if you want a persistent layout:
 #   zellij attach nvim 2>/dev/null || zellij --session nvim
 #
@@ -17,7 +18,6 @@
 # SSH config alias for CIRCE login node (must match Host entry in ~/.ssh/config)
 LOGIN_ALIAS="circe"
 REMOTE_USER="gson"
-INSTANCE="fintech_nvim"
 # Target compute node — matches #SBATCH --nodelist in term_session.sh
 TARGET_NODE="mdc-1057-13-13"
 
@@ -60,10 +60,8 @@ COLS="${_sz##* }" ROWS="${_sz%% *}"
 [[ -z "$ROWS"  || "$ROWS"  -le 0 ]] 2>/dev/null && ROWS=$(tput lines 2>/dev/null || echo 50)
 unset _sz
 
-# ─── SSH to compute node and exec into the running Singularity instance ───────
+# ─── SSH to compute node and launch the container via proot ──────────────────
 # Uses the compute node's native SSH (no container sshd needed).
-# Uses absolute path to singularity binary — module system not available in
-# non-login SSH exec sessions.
 # Drops into interactive zsh (`-i`) so /etc/zsh/zshrc is sourced (aliases,
 # starship, zoxide).  /etc/zsh/zshenv (PATH, XDG_*, EDITOR, SHELL) is sourced
 # unconditionally.  No zellij is launched — start it yourself if desired.
@@ -93,16 +91,57 @@ if ! lsof -nP -iTCP@127.0.0.1:8765 -sTCP:LISTEN >/dev/null 2>&1; then
     echo ""
 fi
 
+# ─── X11 forwarding for VimTeX → sioyek (opt-in) ─────────────────────────────
+# VimTeX's viewer (sioyek) runs inside the container and renders to this Mac's
+# XQuartz over the SSH X11 forward (`-Y`, added to the ssh command below). For
+# that to work the local X server must be running and $DISPLAY must point at it.
+#
+# This is OFF by default: a plain connect should not launch XQuartz or pull in
+# the X11/xauth machinery (which on the compute node prompts for a password and
+# spews ".Xauthority does not exist" warnings). Enable it only when you actually
+# want VimTeX \lv → sioyek:
+#   WITH_X11=1 ./connect_nvim.sh
+X11_SSH_OPT=""
+if [ -z "${WITH_X11:-}" ]; then
+    :   # X11 not requested — skip XQuartz launch and -Y forwarding entirely.
+elif [ -d /Applications/Utilities/XQuartz.app ] || [ -d /opt/X11 ]; then
+    if ! pgrep -xq Xquartz 2>/dev/null; then
+        echo "Starting XQuartz (needed for VimTeX \\lv → sioyek over X11)…"
+        open -a XQuartz 2>/dev/null || true
+        # Give the X server a moment to come up and register its socket.
+        for _i in 1 2 3 4 5; do pgrep -xq Xquartz 2>/dev/null && break; sleep 1; done
+    fi
+    # A plain terminal may not have inherited DISPLAY from the launchd GUI
+    # session; pull it from launchd so ssh -Y has a target X server.
+    if [ -z "${DISPLAY:-}" ]; then
+        DISPLAY="$(launchctl getenv DISPLAY 2>/dev/null)"
+        [ -n "$DISPLAY" ] && export DISPLAY
+    fi
+    if pgrep -xq Xquartz 2>/dev/null && [ -n "${DISPLAY:-}" ]; then
+        X11_SSH_OPT="-Y"
+    else
+        echo "⚠  XQuartz did not come up (no DISPLAY) — VimTeX \\lv won't display."
+        echo "    Try: open -a XQuartz   then rerun ./connect_nvim.sh"
+    fi
+else
+    echo "⚠  XQuartz not installed — VimTeX \\lv (sioyek over X11) won't display."
+    echo "    Install once:  brew install --cask xquartz   (then log out/in)."
+    echo "    Continuing without X11 forwarding."
+fi
+
 # -o ExitOnForwardFailure=yes: if the compute node can't bind 8765 (e.g. an
 # orphaned forward from a previous session is holding the port), ssh aborts
 # immediately instead of dropping you into a shell with a dead tunnel.
-SINGULARITY=/apps/singularity/3.5.3/bin/singularity
+#
+# Singularity/Apptainer can't start containers on compute nodes post-2026, so we
+# launch via ~/bin/proot_dev.sh instead (userspace proot). It forwards args to
+# zsh, so `-i -c '...'` behaves like the old `singularity exec ... zsh -i -c`.
 ssh \
     -J "$LOGIN_ALIAS" \
     -R 8765:127.0.0.1:8765 \
+    ${X11_SSH_OPT} \
     -o ExitOnForwardFailure=yes \
     -tt \
     "$REMOTE_USER@$NODE" \
     "TERM=xterm-256color COLUMNS=$COLS LINES=$ROWS _SSH_COLS=$COLS _SSH_ROWS=$ROWS \
-     $SINGULARITY exec instance://$INSTANCE \
-     zsh -i -c 'stty cols $COLS rows $ROWS 2>/dev/null; exec zsh -i'"
+     ~/bin/proot_dev.sh -i -c 'stty cols $COLS rows $ROWS 2>/dev/null; exec zsh -i'"

@@ -2,7 +2,7 @@
 --
 -- Snacks.explorer.actions.trash() tries `trash` / `gio trash` / `kioclient`
 -- before falling back to `vim.fn.delete(path, "rf")`. On HPC bind-mounts
--- like /work_bgfs, `gio trash` aborts with:
+-- like /work, `gio trash` aborts with:
 --   "Trashing on system internal mounts is not supported"
 -- and the delete fails outright (the fallback is only reached when no trash
 -- binary is executable, not when one runs and errors).

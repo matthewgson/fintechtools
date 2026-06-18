@@ -4,7 +4,7 @@ run  = "close --submit"
 desc = "Confirm completion"
 
 # Skip the system trash on delete.
-# Why: on /work_bgfs (BeeGFS), gio/trash-cli refuses with "Trashing on system
+# Why: on /work (BeeGFS), gio/trash-cli refuses with "Trashing on system
 # internal mounts is not supported", so yazi's default `d` falls back to a
 # cross-filesystem byte copy into ~/.local/share/Trash that stalls for
 # seconds-to-minutes on folders with many entries. `remove --permanently`
@@ -14,4 +14,4 @@ desc = "Confirm completion"
 [[mgr.prepend_keymap]]
 on   = "d"
 run  = "remove --permanently"
-desc = "Delete permanently (skip trash — fast on /work_bgfs)"
+desc = "Delete permanently (skip trash — fast on /work)"

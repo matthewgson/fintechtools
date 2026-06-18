@@ -7,14 +7,14 @@ set -e # Exit on any error
 
 # Configuration
 IMAGE_NAME="fintech-tools"
-VERSION="0.7"
+VERSION="0.8"
 # Flat rootfs tar produced by `podman export` — deployed to CIRCE.
 ROOTFS_TAR="$HOME/fintech-rootfs.tar"
 REMOTE_USER="gson"
 REMOTE_HOST="circe.rc.usf.edu"
 # Rootfs tar destination on CIRCE.
 # /work is persistent and is the only large FS mounted on compute nodes.
-REMOTE_ROOTFS_DIR="/work/g/${REMOTE_USER}/container-sb"
+REMOTE_ROOTFS_DIR="/work/g/${REMOTE_USER}/proot-sb"
 REMOTE_ROOTFS_PATH="${REMOTE_ROOTFS_DIR}/fintech-rootfs.tar"
 
 # Colors for output
@@ -403,6 +403,16 @@ execute_all_transfers() {
     send_pushover_notification "✅ Transfer Complete" "Rootfs tar transferred to CIRCE in ${_tt}s."
     print_status "On a fresh node it extracts automatically; to refresh an already-extracted"
     print_status "node, clear its sandbox: rm -rf /tmp/\$USER/fintech-sbx"
+    # Offer to remove the local tar — it's large (~10 GB) and no longer needed
+    # after a successful transfer. The next build overwrites it anyway.
+    local _tar_size
+    _tar_size=$(du -sh "${ROOTFS_TAR}" 2>/dev/null | cut -f1)
+    read -r -p "Delete local rootfs tar ${ROOTFS_TAR} (${_tar_size}) to free space? (y/N): " _del </dev/tty; echo
+    if [[ $_del =~ ^[Yy]$ ]]; then
+      rm -f "${ROOTFS_TAR}" && print_success "✓ Local rootfs tar deleted" || print_warning "Could not delete ${ROOTFS_TAR}"
+    else
+      print_status "Local rootfs tar kept at ${ROOTFS_TAR}"
+    fi
   else
     print_error "Failed to transfer rootfs tar to CIRCE"
     send_pushover_notification "❌ Transfer Failed" "Rootfs-tar transfer failed. Manual: scp ${ROOTFS_TAR} ${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_ROOTFS_PATH}"

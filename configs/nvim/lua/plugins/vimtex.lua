@@ -2,14 +2,24 @@
 -- into ~/.config/nvim/lua/plugins/.  Augments the LazyVim `lang.tex` extra
 -- (which installs lervag/vimtex) with this container's HPC / SSH viewer wiring.
 --
--- The container is headless, so VimTeX's default viewer (xdg-open via the
--- `general` method) goes nowhere.  Route `<localleader>lv` through the
--- `mac-open` bridge so PDFs open in the Mac's default viewer over the SSH
--- reverse tunnel established by connect_nvim.sh (`-R 8765:127.0.0.1:8765`).
+-- VIEWER: sioyek over X11 (native synctex).  sioyek is installed INSIDE the
+-- container (Dockerfile Stage 5e) and renders to the Mac's XQuartz over the SSH
+-- X11 forward that connect_nvim.sh adds (`-Y`).  Because nvim and sioyek run on
+-- the same machine (the compute node), VimTeX's `sioyek` backend gives true
+-- synctex both ways:
+--   * forward search  <localleader>lv  → jump sioyek to the cursor's PDF spot
+--   * inverse search  (click in sioyek) → jump nvim to the source line
+-- Inverse search is just a local `nvim --server <v:servername> …` call that
+-- VimTeX wires up automatically for method = "sioyek" — no cross-machine bridge.
 --
--- This complements `mac_open.lua`, which already reroutes vim.ui.open for
--- snacks-explorer and `gx`; VimTeX has its own viewer config that bypasses
--- vim.ui.open, so it needs to be set separately.
+-- This is the deliberate replacement for the old `general`/`mac-open` viewer,
+-- which shipped a *copy* of the PDF to the Mac and therefore lost synctex.
+-- `mac_open.lua` still handles non-TeX PDFs (snacks-explorer `o`, `gx`, yazi):
+-- those keep opening on the Mac so casual browsing works without XQuartz.
+--
+-- Note: synctex must be emitted at compile time.  VimTeX's default latexmk
+-- options already include `-synctex=1`, and TinyTeX's engines support it, so no
+-- compiler override is needed here.
 --
 -- `optional = true` means we only add config — we don't pull VimTeX into the
 -- plugin spec on its own.  The LazyVim `lang.tex` extra (or any other spec
@@ -20,9 +30,9 @@ return {
     "lervag/vimtex",
     optional = true,
     init = function()
-      vim.g.vimtex_view_method = "general"
-      vim.g.vimtex_view_general_viewer = "mac-open"
-      vim.g.vimtex_view_general_options = "@pdf"
+      vim.g.vimtex_view_method = "sioyek"
+      -- PATH wrapper from Dockerfile Stage 5e (forces Qt xcb + no MIT-SHM).
+      vim.g.vimtex_view_sioyek_exe = "sioyek"
     end,
   },
 }
