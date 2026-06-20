@@ -64,10 +64,11 @@ echo "========================================="
 echo
 
 # ── Discover what exists ──────────────────────────────────────────────────────
-CONFIG_LIST=(avante.nvim github-copilot btm nvim yazi zellij)
+CONFIG_LIST=(avante.nvim github-copilot btm nvim yazi tmux)
 CONFIGS_DIR="${SCRIPT_DIR}/configs"
 
 HAVE_ZSHRC=0;    [ -f "${SCRIPT_DIR}/.zshrc" ]              && HAVE_ZSHRC=1
+HAVE_IGNORE=0;   [ -f "${SCRIPT_DIR}/.ignore" ]             && HAVE_IGNORE=1
 HAVE_TERM=0;     [ -f "${SCRIPT_DIR}/term_session.sh" ]     && HAVE_TERM=1
 HAVE_PROOT=0;    [ -f "${SCRIPT_DIR}/proot_dev.sh" ]        && HAVE_PROOT=1
 HAVE_CONNECT=0;  [ -f "${SCRIPT_DIR}/connect_nvim.sh" ]     && HAVE_CONNECT=1
@@ -76,6 +77,7 @@ HAVE_LISTENER=0; [ -f "${SCRIPT_DIR}/mac_open_listener.py" ] && HAVE_LISTENER=1
 print_status "Will deploy:"
 echo "  • ~/.config/{$(IFS=,; echo "${CONFIG_LIST[*]}")} → CIRCE"
 [ "$HAVE_ZSHRC"    -eq 1 ] && echo "  • .zshrc → CIRCE ~/"
+[ "$HAVE_IGNORE"   -eq 1 ] && echo "  • .ignore → CIRCE ~/  (fd/ripgrep excludes)"
 [ "$HAVE_TERM"     -eq 1 ] && echo "  • term_session.sh → CIRCE ~/sh/"
 [ "$HAVE_PROOT"    -eq 1 ] && echo "  • proot_dev.sh → CIRCE ~/bin/"
 [ "$HAVE_CONNECT"  -eq 1 ] && echo "  • connect_nvim.sh → ~/  (local)"
@@ -114,6 +116,7 @@ for cfg in "${CONFIG_LIST[@]}"; do
   _is_replace=0; _is_overlay=0
   case "$cfg" in
     yazi) _is_replace=1 ;;
+    tmux) _is_replace=1 ;;   # repo owns the container tmux.conf (no Mac copy)
     nvim) _is_overlay=1 ;;
   esac
 
@@ -141,6 +144,11 @@ done
 if [ "$HAVE_ZSHRC" -eq 1 ]; then
   cp "${SCRIPT_DIR}/.zshrc" "$STAGING/.zshrc"
   _staged+=(".zshrc")
+fi
+
+if [ "$HAVE_IGNORE" -eq 1 ]; then
+  cp "${SCRIPT_DIR}/.ignore" "$STAGING/.ignore"
+  _staged+=(".ignore")
 fi
 
 if [ "$HAVE_TERM" -eq 1 ]; then

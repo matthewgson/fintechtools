@@ -17,8 +17,21 @@ err() { echo "proot_dev: $*" >&2; }
 
 [ -x "$PROOT" ] || { err "proot binary not found/executable at $PROOT"; exit 127; }
 
-# Required: proot's seccomp acceleration segfaults every container binary on the
-# muma_2021 CPUs (Xeon 4314). Pure ptrace works on all CIRCE nodes. Don't remove.
+# Keep proot in pure-ptrace mode (PROOT_NO_SECCOMP=1). Toggling seccomp does
+# NOT help with this proot 5.3.1 static binary — tested live on mdc-1057-13-13
+# (AMD EPYC 7702) 2026-06-18: a 400k read/write-syscall `dd bs=1` ran ~6.0s
+# (sys ~7.1s) with PROOT_NO_SECCOMP=0 and ~5.8s (sys ~7.1s) with =1 — identical.
+# seccomp IS compiled in and proot reports "ptrace acceleration (seccomp mode 2)
+# enabled" by default, but it never materializes here: read/write (which seccomp
+# should let run native) still trap ~17 µs each, so the kernel seccomp-event
+# path proot 5.3.1 needs isn't working on this node (its own strings warn
+# "PTRACE_O_TRACESECCOMP not supported yet ... set PROOT_NO_SECCOMP to 1"), and
+# it keeps syscall-tracing everything. The flag is thus a perf no-op — and
+# seccomp was seen to segfault binaries on Xeon 4314 muma_2021 nodes — so pure
+# ptrace is strictly the better default. Dropping the per-syscall tax needs a
+# proot version where seccomp actually accelerates (re-test with the same dd
+# A/B) or Apptainer (userns; no ptrace at all). An explicit PROOT_NO_SECCOMP in
+# the environment overrides this.
 export PROOT_NO_SECCOMP="${PROOT_NO_SECCOMP:-1}"
 
 # Pick a node-local, exec-capable scratch dir for the sandbox (fixed order so the
@@ -57,19 +70,45 @@ if [ ! -e "$SBX_READY" ]; then
     exec 9>&-
 fi
 
+# ─── Redirect regenerable hot state off the slow network home → node-local /tmp
+# The network home (Quobyte/BeeGFS via FUSE) costs ~16 ms per small-file create
+# vs ~0.3 ms on node-local /tmp — a ~45× metadata penalty, and proot compounds
+# it because every syscall is ptraced (PROOT_NO_SECCOMP=1, mandatory on
+# muma_2021, disables the seccomp fast-path). Tools that churn many small files
+# under $HOME stall as a result; point the worst offenders at /tmp instead.
+#
+# Same safe guard as the nvim block in /etc/zsh/zshenv: relink only when the
+# source is absent or already a symlink, so a real directory holding data is
+# never hidden. Done host-side here (once per connection, not per shell), but
+# $HOME and /tmp are bound 1:1 into the guest so the links resolve identically
+# inside the container. If a hot dir already exists as a REAL dir on the home,
+# delete it once (it's pure scratch) so the symlink can form:
+#   rm -rf ~/.claude/shell-snapshots ~/.claude/statsig
+_scratch="$(dirname "$FINTECH_SBX")"          # same node-local FS proot picked
+_link_scratch() {                              # $1 = path relative to $HOME
+    local src="$HOME/$1" dst="$_scratch/$1"
+    mkdir -p "$dst" "$(dirname "$src")" 2>/dev/null || return 0
+    if [ -L "$src" ] || [ ! -e "$src" ]; then ln -sfn "$dst" "$src" 2>/dev/null || true; fi
+}
+# Claude Code rewrites a shell snapshot under shell-snapshots/ on EVERY Bash
+# tool call and churns statsig/ telemetry — both pure scratch. (projects/ holds
+# conversation history and ~/.claude.json holds auth, so those stay on the home
+# to survive an allocation.)
+_link_scratch ".claude/shell-snapshots"
+_link_scratch ".claude/statsig"
+
 # Bind mounts (proot's -b uses the same host:guest syntax as Singularity --bind).
 #
 # We launch with -r (bare rootfs) + these binds applied by hand rather than -R.
 # -R is "rootfs + recommended host binds", but on this proot build (5.3.1) the
 # -R code path leaves /proc/<pid>/exe untranslated: inside the sandbox
 # /proc/self/exe resolves to the host proot loader (or nothing) instead of the
-# guest binary. Anything that calls current_exe() to re-exec itself — notably
-# zellij, which spawns its server that way — then dies at startup with:
-#   "no /proc/self/exe available. Is /proc mounted?"
+# guest binary. Anything that calls current_exe() to re-exec itself dies at
+# startup with "no /proc/self/exe available. Is /proc mounted?".
 # Applying the same binds explicitly under -r keeps identical behavior (same uid
 # — -R does NOT grant root here — same $HOME, same tools) AND restores
 # /proc/self/exe translation. Verified 2026-06-18 on mdc-1057-13-13:
-# readlink /proc/self/exe → guest path, zellij server spawns.
+# readlink /proc/self/exe → guest path.
 BINDS=()
 # -R's recommended bind set, applied by hand. Bind only sources that exist so
 # proot doesn't abort on a missing path (e.g. /run or an absent /etc/* file).

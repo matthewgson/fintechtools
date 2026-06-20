@@ -45,7 +45,7 @@ new image: `rm -rf /tmp/$USER/fintech-sbx`.
 | LaTeX | **TinyTeX** baked in at `/opt/TinyTeX` — installed via direct tarball pull from [`rstudio/tinytex-releases`](https://github.com/rstudio/tinytex-releases) (`TinyTeX-linux-x86_64-<TAG>.tar.xz`), no R/Rscript dependency in Stage 5d. Binaries symlinked into `/usr/local/bin` via `tlmgr path add` (with `sys_bin` pinned explicitly so the build does not fall back to `/root/.local/bin`). Ships `latexmk`, `pdflatex`, `xelatex`, `lualatex`, `biber`, plus `collection-latexrecommended`, `collection-fontsrecommended`, and `biblatex`. VimTeX (`lang.tex` extra) and Quarto find them automatically. The image is read-only at runtime, so extra packages install in user-mode — `TEXMFHOME` is pinned to `~/texmf` in zshenv so `tlmgr --usermode init-usertree && tlmgr --usermode install <pkg>` lands in a predictable, kpathsea-discoverable tree (no root required). Alternatively, rebuild the container with the package appended to Stage 5d. A pre-existing `~/.TinyTeX` install is honored — zshenv prepends it to `$PATH` so any user-installed extras win over the system copy. |
 | Editor | Neovim (latest) + LazyVim starter |
 | LazyVim extras | `ai.copilot`, `lang.html`, `lang.python`, plus git/json/markdown/yaml/toml |
-| Terminal | Zellij (multiplexer), Yazi (file manager) with all recommended deps, lazygit, `ncurses-term` (many terminfos) |
+| Terminal | tmux (multiplexer), Yazi (file manager) with all recommended deps, lazygit, `ncurses-term` (many terminfos) |
 | AI CLIs | `copilot` (GitHub Copilot standalone CLI) + `claude` (Anthropic Claude Code) |
 | SSH | `openssh-client` (git/scp); sshd not used |
 | mac-open | `/usr/local/bin/mac-open` — pure-Python client that ships files/URLs to a listener on the Mac (see "mac-open" below). VimTeX's PDF viewer (`<localleader>lv`) is routed through it by `configs/nvim/lua/plugins/vimtex.lua`. |
@@ -114,16 +114,17 @@ the container's `localhost:8765` is the Mac's loopback.
 
 ### How configs/ syncs
 
-`build_container.sh` applies a per-cfg policy in its staging step:
+`sync_configs.sh` applies a per-cfg policy in its staging step:
 
 | cfg | Policy | Why |
 |---|---|---|
 | `yazi` | **replace** — repo's `configs/yazi/` becomes CIRCE's `~/.config/yazi/` | Container needs `mac-open` opener; Mac uses the native `open` command |
+| `tmux` | **replace** — repo's `configs/tmux/` becomes CIRCE's `~/.config/tmux/` | Container-specific multiplexer config (replaced zellij); no Mac copy |
 | `nvim` | **overlay** — Mac's `~/.config/nvim/` is staged, then `configs/nvim/*` is rsync'd on top | Keeps your Mac LazyVim config canonical; just drops in the `mac_open.lua` plugin |
-| `avante.nvim`, `github-copilot`, `btm`, `zellij` | **mac-only** — direct from Mac | No container-specific overrides needed |
+| `avante.nvim`, `github-copilot`, `btm` | **mac-only** — direct from Mac | No container-specific overrides needed |
 
 To add another override: drop files into `configs/<cfg>/` and (if needed) add
-the cfg name to the `replace`/`overlay` case in `build_container.sh:execute_all_transfers`.
+the cfg name to `CONFIG_LIST` and the `replace`/`overlay` case in `sync_configs.sh`.
 
 ### Test
 

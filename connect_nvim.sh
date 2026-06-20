@@ -8,8 +8,8 @@
 #   WITH_X11=1 ./connect_nvim.sh   # also launch XQuartz + ssh -Y for VimTeX \lv
 #
 # Drops into an interactive zsh inside the container (launched via proot).
-# Start zellij/nvim manually from there if you want a persistent layout:
-#   zellij attach nvim 2>/dev/null || zellij --session nvim
+# Start tmux/nvim manually from there if you want a persistent layout:
+#   tm   (= tmux new-session -A -s main; attaches if it already exists)
 #
 # Requires:
 #   ~/.ssh/config entry for Host circe with IdentityFile ~/.ssh/circe_key
@@ -47,7 +47,7 @@ else
 fi
 
 echo "Connecting to container on $NODE ..."
-echo "(Inside the container, start zellij manually if you want: zellij --session nvim)"
+echo "(Inside the container, start tmux manually if you want: tm)"
 echo ""
 
 # ─── Capture local terminal dimensions ───────────────────────────────────────
@@ -64,7 +64,7 @@ unset _sz
 # Uses the compute node's native SSH (no container sshd needed).
 # Drops into interactive zsh (`-i`) so /etc/zsh/zshrc is sourced (aliases,
 # starship, zoxide).  /etc/zsh/zshenv (PATH, XDG_*, EDITOR, SHELL) is sourced
-# unconditionally.  No zellij is launched — start it yourself if desired.
+# unconditionally.  No tmux is launched — start it yourself if desired (`tm`).
 #
 # _SSH_COLS / _SSH_ROWS: custom env vars that carry the Mac terminal dimensions
 # into the container.  zsh will NOT overwrite these (unlike $COLUMNS/$LINES,

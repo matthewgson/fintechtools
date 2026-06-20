@@ -1,0 +1,17 @@
+# Deployed to CIRCE ~/.ignore by sync_configs.sh.
+#
+# Both fd and ripgrep honor .ignore files, so this controls what the Neovim
+# file picker (snacks find-files) and live-grep walk. connect_nvim.sh drops you
+# into $HOME, whose R library / tool dirs hold ~55k files on the slow network
+# FS — scanning them made find-files hang ~10 s. Excluding them: ~10.6 s → 55 ms.
+#
+# Leading "/" anchors each pattern to the home root, so a project's own bin/ or
+# R/ subdir under $HOME is NOT excluded — only the top-level tool dirs are.
+/R/
+/bin/
+/quarto/
+/texmf/
+/h2o_jar/
+/miniconda3/
+/mambaforge/
+/micromamba/

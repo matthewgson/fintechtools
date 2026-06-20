@@ -16,7 +16,6 @@ ARG YAZI_VERSION=v26.5.6
 ARG RESVG_VERSION=0.47.0
 ARG FZF_VERSION=0.73.1
 ARG ZOXIDE_VERSION=0.9.9
-ARG ZELLIJ_VERSION=0.44.3
 ARG BOTTOM_VERSION=0.12.3
 # sioyek = VimTeX's synctex-capable PDF viewer; pinned to match the Mac install.
 ARG SIOYEK_VERSION=v2.0.0
@@ -119,6 +118,13 @@ RUN apt-get update && \
     pandoc \
     git \
     rsync \
+    # tmux: terminal multiplexer (persistent panes/sessions across reconnects).
+    # Chosen over zellij here because a fresh zellij session is multi-second slow
+    # under proot — its WASM plugin runtime + async plugin handshake fire a huge
+    # number of syscalls at *create*, and PROOT_NO_SECCOMP=1 ptraces every one.
+    # tmux is a lean C server with a built-in status line (no interpreter, no
+    # plugin protocol), so a fresh session creates in ~0.03s on the same node.
+    tmux \
     nano \
     vim \
     wget \
@@ -465,14 +471,8 @@ RUN BOTTOM_VERSION=${BOTTOM_VERSION} && \
     chmod +x /usr/local/bin/btm && \
     rm /tmp/bottom.tar.gz
 
-# ─── Stage 9: Zellij (terminal multiplexer) ─────────────────────────────────
-RUN ZELLIJ_VERSION=${ZELLIJ_VERSION} && \
-    echo "Installing Zellij ${ZELLIJ_VERSION}" && \
-    curl -L "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-x86_64-unknown-linux-musl.tar.gz" \
-        -o /tmp/zellij.tar.gz && \
-    tar -C /usr/local/bin -xzf /tmp/zellij.tar.gz zellij && \
-    chmod +x /usr/local/bin/zellij && \
-    rm /tmp/zellij.tar.gz
+# Terminal multiplexer (tmux) is installed from apt in Stage 1 — see the note
+# there for why tmux replaced zellij in this image.
 
 # ─── Stage 10: GitHub CLI ────────────────────────────────────────────────────
 RUN mkdir -p -m 755 /etc/apt/keyrings && \
@@ -570,7 +570,7 @@ RUN ln -sf "$(which fdfind)" /usr/local/bin/fd 2>/dev/null || true && \
 # ──────────────────────────────────────────────────────────────────────────────
 # /etc/zsh/zshenv — sourced by EVERY zsh invocation (login, interactive,
 # non-interactive `zsh -c`, scripts).  We keep environment exports here so that
-# zellij/yazi/scp/etc. that spawn `zsh -c '…'` inherit the right env.
+# tmux/yazi/scp/etc. that spawn `zsh -c '…'` inherit the right env.
 # Aliases and interactive integrations go in /etc/zsh/zshrc.
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -602,10 +602,10 @@ fi
 #   tlmgr --usermode install <pkg>   # installs into ~/texmf, no root needed
 export TEXMFHOME="${HOME}/texmf"
 
-# ── Make zsh the default for child shells (zellij, scripts) ──────────────────
+# ── Make zsh the default for child shells (tmux, scripts) ────────────────────
 # CIRCE's /etc/passwd sets login shell to bash, which is inherited via the
-# bind-mounted home.  Force SHELL=zsh inside the container so zellij and
-# other terminal multiplexers spawn zsh panes by default.
+# bind-mounted home.  Force SHELL=zsh inside the container so tmux (and other
+# terminal multiplexers) spawn zsh panes by default.
 export SHELL=/bin/zsh
 
 # ── XDG base dirs: use runtime $HOME, not the build-time /home/gson path ─────
@@ -621,6 +621,15 @@ export XDG_STATE_HOME="${HOME}/.local/state"
 # Redirecting to /tmp (local disk) keeps the cache fast.
 export XDG_CACHE_HOME="/tmp/${USER}/.cache"
 mkdir -p "${XDG_CACHE_HOME}/nvim" 2>/dev/null
+
+# ── tmux server state on fast /tmp ───────────────────────────────────────────
+# tmux keeps its socket under $TMUX_TMPDIR (default /tmp), which is node-local
+# ext3 — already fast, nothing to redirect.  A fresh tmux session creates in
+# ~0.03s even under proot's PROOT_NO_SECCOMP=1 ptrace, because tmux is a lean C
+# server with a built-in status line: no WASM interpreter and no plugin
+# handshake firing thousands of traced syscalls at create.  For persistence
+# across reconnects, attach to a named session (`tm` helper in .zshrc =
+# tmux new-session -A -s main) rather than re-creating.
 
 # ── Neovim data/state on node-local /tmp via symlinks ────────────────────────
 # Quobyte/BeeGFS network home incurs ~1.2 ms per file × thousands of files
@@ -694,7 +703,7 @@ function y() {
     # Resolve terminal dimensions in priority order:
     #
     #   1. stty size — reads TIOCGWINSZ directly from the PTY fd.  Correct for
-    #      zellij panes (zellij sets each pane's PTY size) and for any resize
+    #      tmux panes (tmux sets each pane's PTY size) and for any resize
     #      (SSH sends TIOCSWINSZ + SIGWINCH on the remote PTY after a resize,
     #      making TIOCGWINSZ reliable immediately afterwards).
     #
