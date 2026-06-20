@@ -46,7 +46,7 @@ new image: `rm -rf /tmp/$USER/fintech-sbx`.
 | Editor | Neovim (latest) + LazyVim starter |
 | LazyVim extras | `ai.copilot`, `lang.html`, `lang.python`, plus git/json/markdown/yaml/toml |
 | Terminal | tmux (multiplexer), Yazi (file manager) with all recommended deps, lazygit, `ncurses-term` (many terminfos) |
-| AI CLIs | `copilot` (GitHub Copilot standalone CLI) + `claude` (Anthropic Claude Code) |
+| AI agents | `claude` (Claude Code) **is** bundled as an in-container fallback, but runs sluggishly under proot (`PROOT_NO_SECCOMP=1` ptraces every syscall) — prefer running it locally on the Mac and driving the node over SSH. The standalone `copilot` CLI is **not** bundled (run locally). Neovim's inline Copilot (LSP via `copilot.lua`/`avante.nvim`) **is** included. |
 | SSH | `openssh-client` (git/scp); sshd not used |
 | mac-open | `/usr/local/bin/mac-open` — pure-Python client that ships files/URLs to a listener on the Mac (see "mac-open" below). VimTeX's PDF viewer (`<localleader>lv`) is routed through it by `configs/nvim/lua/plugins/vimtex.lua`. |
 

@@ -3,7 +3,7 @@
 FROM ubuntu:24.04
 
 LABEL maintainer="Matthew Son"
-LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Copilot CLI + TinyTeX + sioyek"
+LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Claude Code CLI + TinyTeX + sioyek"
 LABEL version="0.8"
 
 # ─── Version pins — bump here to upgrade any tool ────────────────────────────
@@ -529,14 +529,19 @@ RUN mkdir -p /opt/host-slurm/bin /opt/host-slurm/lib \
         chmod +x "/usr/local/bin/${cmd}"; \
     done
 
-# ─── Stage 11: AI CLIs + GitHub Copilot LSP + tree-sitter ───────────────────
-# @anthropic-ai/claude-code       : Anthropic Claude terminal coding agent.
-# @github/copilot                 : GitHub Copilot standalone CLI (invoked as `copilot`).
-#                                   Replaces the deprecated `gh-copilot` extension.
+# ─── Stage 11: claude-code CLI + Neovim Copilot LSP + tree-sitter ────────────
+# @anthropic-ai/claude-code       : Anthropic Claude terminal coding agent. Kept
+#     as a just-in-case in-container fallback. Heads-up: it feels sluggish under
+#     proot — PROOT_NO_SECCOMP=1 ptraces every syscall and an interactive agent
+#     is far more syscall-heavy than the editor — so prefer running `claude`
+#     locally on the Mac and driving this box over SSH when you can.
 # @github/copilot-language-server : GitHub Copilot LSP backend for Neovim
 #     Copilot plugins (copilot.lua, avante.nvim) — inline completions + chat.
 # tree-sitter-cli                 : required by nvim-treesitter to compile parsers.
-RUN npm install -g @anthropic-ai/claude-code @github/copilot @github/copilot-language-server tree-sitter-cli
+#
+# The standalone GitHub Copilot CLI (@github/copilot) is intentionally NOT
+# installed — run it locally if you need it.
+RUN npm install -g @anthropic-ai/claude-code @github/copilot-language-server tree-sitter-cli
 
 # ─── Stage 11b: Starship prompt ──────────────────────────────────────────────
 RUN curl -sS https://starship.rs/install.sh | sh -s -- --yes
