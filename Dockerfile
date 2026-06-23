@@ -20,6 +20,9 @@ ARG BOTTOM_VERSION=0.12.3
 # bookokrat = terminal PDF/EPUB reader (kitty graphics); the primary VimTeX/yazi
 # viewer now — renders in-terminal over SSH, no X11/XQuartz. Pinned to the Mac.
 ARG BOOKOKRAT_VERSION=v0.3.12
+# catppuccin/tmux = tmux status-bar theme, baked into the image and sourced
+# directly (no TPM at runtime). Pinned to match the Mac (which tracks "latest").
+ARG CATPPUCCIN_TMUX_VERSION=v2.3.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/New_York
@@ -393,6 +396,19 @@ RUN BOTTOM_VERSION=${BOTTOM_VERSION} && \
     tar -C /usr/local/bin -xzf /tmp/bottom.tar.gz btm && \
     chmod +x /usr/local/bin/btm && \
     rm /tmp/bottom.tar.gz
+
+# ─── Stage 8f: catppuccin/tmux theme (status bar) ───────────────────────────
+# tmux status-bar theme, baked into the image so the container's bar matches the
+# Mac's. configs/tmux/tmux.conf sources it directly from this path (no TPM, no
+# ~/.config plugin clone — keeps it on the fast rootfs, not the FUSE home).
+RUN CATPPUCCIN_TMUX_VERSION=${CATPPUCCIN_TMUX_VERSION} && \
+    echo "Installing catppuccin/tmux ${CATPPUCCIN_TMUX_VERSION}" && \
+    mkdir -p /usr/local/share/tmux-plugins/catppuccin && \
+    curl -fL "https://github.com/catppuccin/tmux/archive/refs/tags/${CATPPUCCIN_TMUX_VERSION}.tar.gz" \
+        -o /tmp/catppuccin-tmux.tar.gz && \
+    tar -C /usr/local/share/tmux-plugins/catppuccin --strip-components=1 -xzf /tmp/catppuccin-tmux.tar.gz && \
+    rm /tmp/catppuccin-tmux.tar.gz && \
+    { [ -f /usr/local/share/tmux-plugins/catppuccin/catppuccin.tmux ] || { echo "ERROR: catppuccin.tmux missing after extract" >&2; exit 1; }; }
 
 # Terminal multiplexer (tmux) is installed from apt in Stage 1 — see the note
 # there for why tmux replaced zellij in this image.
