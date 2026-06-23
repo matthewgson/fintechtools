@@ -9,9 +9,12 @@ from VSCode Remote-SSH (legacy, still works) to **Neovim** SSH.
 ./build_container.sh
 ```
 
-Does it all: builds with Podman → `podman export` to a flat rootfs tar →
-optional `scp` to CIRCE (`/work/g/gson/fintech-rootfs.tar`).
-Pushover notifications fire if `~/.pushover_config` is set.
+One-shot: builds with Podman → `podman export` to a flat rootfs tar → optional
+`scp` to CIRCE (`/work/g/gson/fintech-rootfs.tar`) → optionally runs
+`sync_configs.sh` (default yes) to push configs + the `~/.local/bin` wrappers, so
+the node is fully ready in a single run. Both deployment choices are asked up
+front, then the build runs unattended. Pushover notifications fire if
+`~/.pushover_config` is set.
 
 Prereqs (one-time):
 
@@ -22,10 +25,14 @@ podman machine init && podman machine start
 
 ## Running on CIRCE
 
-One-time setup (the build script deploys the rootfs tar automatically):
+One-time setup (`./build_container.sh` deploys the rootfs tar **and** runs the
+config sync automatically; run `sync_configs.sh` on its own only when you change
+configs without rebuilding):
 
 ```bash
-./sync_configs.sh   # deploys term_session.sh → ~/sh/ and proot_dev.sh → ~/bin/ on CIRCE
+./sync_configs.sh   # push to CIRCE: term_session.sh → ~/sh/, proot_dev.sh → ~/bin/,
+                    # bookokrat-{split,forward,inverse} → ~/.local/bin/,
+                    # and ~/.config/{nvim,yazi,tmux,bookokrat,…}
 ```
 
 Daily use: `sbatch ~/sh/term_session.sh`, then `./connect_nvim.sh` from the Mac.
@@ -48,7 +55,7 @@ new image: `rm -rf /tmp/$USER/fintech-sbx`.
 | Terminal | tmux (multiplexer), Yazi (file manager) with all recommended deps, lazygit, `ncurses-term` (many terminfos) |
 | AI agents | `claude` (Claude Code) **is** bundled as an in-container fallback, but runs sluggishly under proot (`PROOT_NO_SECCOMP=1` ptraces every syscall) — prefer running it locally on the Mac and driving the node over SSH. The standalone `copilot` CLI is **not** bundled (run locally). Neovim's inline Copilot (LSP via `copilot.lua`/`avante.nvim`) **is** included. |
 | SSH | `openssh-client` (git/scp); sshd not used |
-| mac-open | `/usr/local/bin/mac-open` — pure-Python client that ships files/URLs to a listener on the Mac (see "mac-open" below). VimTeX's PDF viewer (`<localleader>lv`) is routed through it by `configs/nvim/lua/plugins/vimtex.lua`. |
+| PDF viewer | **bookokrat** at `/usr/local/bin/bookokrat` — terminal PDF/EPUB reader (kitty graphics, renders over SSH; no X11). VimTeX (`<localleader>lv`), yazi, and snacks-explorer route PDFs to it (see "PDF viewing" below). |
 
 Yazi deps included (per [yazi docs](https://yazi-rs.github.io/docs/installation)):
 `file`, `p7zip`, `jq`, `poppler-utils`, `fd`, `ripgrep`, `fzf`,
@@ -56,106 +63,49 @@ Yazi deps included (per [yazi docs](https://yazi-rs.github.io/docs/installation)
 
 ```
 
-## mac-open — open remote files on Mac browser
+## PDF viewing — bookokrat
 
-Pure-Python bridge so yazi / snacks-explorer inside the container can hand PDFs,
-HTML, and images to the Mac's default browser/Preview. Two files, no external
-dependencies:
+PDFs (and EPUBs) open in **bookokrat**, a terminal reader that draws inline via
+the kitty graphics protocol — which **ghostty** renders straight over SSH, so no
+X11/XQuartz and no Mac-side helper are involved. Synctex works both ways because
+Neovim and bookokrat run on the same node.
 
-- `mac_open_listener.py` (runs on Mac) — HTTP listener on `127.0.0.1:8765`, calls `open`.
-- `mac_open.py` (baked into container as `/usr/local/bin/mac-open`) — POSTs file/URL.
+- **Binary** — baked into the image at `/usr/local/bin/bookokrat` (Dockerfile Stage 5f).
+- **Wrappers** — synced to `~/.local/bin/` by `sync_configs.sh` (on `$PATH` inside the container):
+  - `bookokrat-split` — opens a PDF in a new tmux split (forwards `$NVIM` for inverse search).
+  - `bookokrat-forward` — VimTeX forward search (`<localleader>lv`): jumps an open instance, or launches one.
+  - `bookokrat-inverse` — synctex inverse search: `gd` / Ctrl-click in the PDF jumps Neovim to the source line.
+- **Config** — `configs/bookokrat/` → `~/.config/bookokrat/` (inverse search wired via `synctex_editor`).
+- **Wiring** — VimTeX (`configs/nvim/lua/plugins/vimtex.lua`, `general` viewer), yazi
+  (`*.pdf`/`*.epub` opener), and `vim.ui.open` / snacks-explorer
+  (`pdf_open.lua`, `snacks.lua`) all route PDFs to bookokrat.
 
-Wiring: `connect_nvim.sh` adds `-R 8765:127.0.0.1:8765` to the SSH command, so
-the container's `localhost:8765` is the Mac's loopback.
+### Test
 
-### Setup
+After SSH'ing in via `./connect_nvim.sh`, from inside the container (in tmux):
 
-1. **Rebuild + sync** — `./build_container.sh` does three things at once when
-   you accept all the prompts:
-   - Bakes `mac-open` (from `mac_open.py`) into the container as `/usr/local/bin/mac-open`.
-   - Deploys configs to CIRCE:
-     - `configs/yazi/yazi.toml` → CIRCE `~/.config/yazi/yazi.toml` (full replace).
-     - `configs/nvim/lua/plugins/mac_open.lua` → CIRCE `~/.config/nvim/lua/plugins/`
-       (overlaid on top of your Mac nvim config; LazyVim auto-discovers it).
-   - Installs the Mac listener locally: `mac_open_listener.py` → `~/mac_open_listener.py` (executable).
-2. **Run the listener as a LaunchAgent** so it auto-starts at login and
-   restarts on failure — forgetting to start it is the #1 cause of silent
-   "open does nothing" failures.
+```bash
+bookokrat-split /work/g/gson/some.pdf   # opens in a new tmux split
+```
 
-   One-time install:
-   ```bash
-   launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.matthewson.mac-open-listener.plist
-   ```
+In yazi: Enter on a `.pdf`/`.epub` opens it in a bookokrat split.
+In Neovim: `<localleader>lv` in a `.tex` forward-searches; `gd` / Ctrl-click in
+bookokrat jumps back to the source line.
 
-   Manage it:
-
-   ```bash
-   launchctl kickstart -k gui/$(id -u)/com.matthewson.mac-open-listener   # restart
-   launchctl bootout    gui/$(id -u)/com.matthewson.mac-open-listener     # stop+unload
-   lsof -nP -iTCP:8765                                                    # verify it's listening
-   tail -f ~/Library/Logs/mac-open-listener.log                           # watch traffic
-   ```
-
-   Files arrive in `~/.mac-open-inbox`. If you prefer a visible terminal
-   instance instead, bootout the agent and run `~/mac_open_listener.py` by
-   hand (Ctrl-C to stop).
-3. **Connect** with `./connect_nvim.sh` — it adds `-R 8765:127.0.0.1:8765` to
-   the ssh command automatically. It also pre-checks that something is bound
-   to `127.0.0.1:8765` on the Mac and uses `ExitOnForwardFailure=yes` so a
-   port collision on the compute node aborts immediately instead of dropping
-   you into a shell with a dead tunnel.
-
-### Where the files live
-
-| File | Lives | Notes |
-|---|---|---|
-| `mac_open.py` | repo + `/usr/local/bin/mac-open` in container | Baked into image at build time |
-| `mac_open_listener.py` | repo + `~/mac_open_listener.py` on Mac | Copied by `build_container.sh` |
-
-### How configs/ syncs
+## How configs/ syncs
 
 `sync_configs.sh` applies a per-cfg policy in its staging step:
 
 | cfg | Policy | Why |
 |---|---|---|
-| `yazi` | **replace** — repo's `configs/yazi/` becomes CIRCE's `~/.config/yazi/` | Container needs `mac-open` opener; Mac uses the native `open` command |
+| `yazi` | **replace** — repo's `configs/yazi/` becomes CIRCE's `~/.config/yazi/` | Container-specific openers (e.g. bookokrat for PDFs) |
 | `tmux` | **replace** — repo's `configs/tmux/` becomes CIRCE's `~/.config/tmux/` | Container-specific multiplexer config (replaced zellij); no Mac copy |
-| `nvim` | **overlay** — Mac's `~/.config/nvim/` is staged, then `configs/nvim/*` is rsync'd on top | Keeps your Mac LazyVim config canonical; just drops in the `mac_open.lua` plugin |
+| `bookokrat` | **replace** — repo's `configs/bookokrat/` becomes CIRCE's `~/.config/bookokrat/` | Container owns the bookokrat config |
+| `nvim` | **overlay** — Mac's `~/.config/nvim/` is staged, then `configs/nvim/*` is rsync'd on top | Keeps your Mac LazyVim config canonical; drops in the container plugins |
 | `avante.nvim`, `github-copilot`, `btm` | **mac-only** — direct from Mac | No container-specific overrides needed |
 
 To add another override: drop files into `configs/<cfg>/` and (if needed) add
 the cfg name to `CONFIG_LIST` and the `replace`/`overlay` case in `sync_configs.sh`.
-
-### Test
-
-After SSH'ing in via `./connect_nvim.sh` (with the Mac listener running):
-
-```bash
-mac-open https://example.com           # browser pops up on Mac
-mac-open /work/g/gson/some.pdf    # PDF opens on Mac
-```
-
-In yazi: hit `o` on a `.pdf`/`.html`/image → routes through `mac-open`.
-In Neovim/snacks-explorer: `o` on the same files works the same way (via the
-`vim.ui.open` override in `mac_open.lua`).
-
-### Troubleshooting
-
-- **`mac-open` doesn't respond in yazi / snacks-explorer.** First check the
-  listener is up on the Mac: `lsof -nP -iTCP:8765` should show a Python
-  process bound. If empty: `launchctl kickstart -k gui/$(id -u)/com.matthewson.mac-open-listener`.
-  Yazi opens with `block = false, orphan = true` and snacks calls
-  `vim.system(..., { detach = true })`, so both swallow any error — running
-  `mac-open <file>` manually inside the container surfaces the real message.
-- "cannot reach Mac listener" → the listener isn't running on Mac, or you
-  SSH'd in without going through `connect_nvim.sh` (so no `-R` forward).
-- Tail traffic on the Mac: `tail -f ~/Library/Logs/mac-open-listener.log` —
-  each request prints an `open-url` / `open-file` line.
-- Port collision on the compute node: with `ExitOnForwardFailure=yes` in
-  `connect_nvim.sh`, ssh now aborts with a clear "remote port forwarding
-  failed for listen port 8765" if a previous (orphaned) session is holding
-  the port. Wait for the stale tunnel to expire or kill the owning ssh
-  process on the compute node.
 
 ## R packages — PPM
 

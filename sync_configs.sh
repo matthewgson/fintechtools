@@ -64,7 +64,7 @@ echo "========================================="
 echo
 
 # ── Discover what exists ──────────────────────────────────────────────────────
-CONFIG_LIST=(avante.nvim github-copilot btm nvim yazi tmux)
+CONFIG_LIST=(avante.nvim github-copilot btm nvim yazi tmux bookokrat)
 CONFIGS_DIR="${SCRIPT_DIR}/configs"
 
 HAVE_ZSHRC=0;    [ -f "${SCRIPT_DIR}/.zshrc" ]              && HAVE_ZSHRC=1
@@ -72,7 +72,12 @@ HAVE_IGNORE=0;   [ -f "${SCRIPT_DIR}/.ignore" ]             && HAVE_IGNORE=1
 HAVE_TERM=0;     [ -f "${SCRIPT_DIR}/term_session.sh" ]     && HAVE_TERM=1
 HAVE_PROOT=0;    [ -f "${SCRIPT_DIR}/proot_dev.sh" ]        && HAVE_PROOT=1
 HAVE_CONNECT=0;  [ -f "${SCRIPT_DIR}/connect_nvim.sh" ]     && HAVE_CONNECT=1
-HAVE_LISTENER=0; [ -f "${SCRIPT_DIR}/mac_open_listener.py" ] && HAVE_LISTENER=1
+# bookokrat synctex wrappers → ~/.local/bin (on PATH inside the container).
+BOOKOKRAT_SCRIPTS=(bookokrat-split bookokrat-forward bookokrat-inverse)
+HAVE_BOOKOKRAT_SCRIPTS=1
+for _s in "${BOOKOKRAT_SCRIPTS[@]}"; do
+  [ -f "${SCRIPT_DIR}/${_s}" ] || HAVE_BOOKOKRAT_SCRIPTS=0
+done
 
 print_status "Will deploy:"
 echo "  • ~/.config/{$(IFS=,; echo "${CONFIG_LIST[*]}")} → CIRCE"
@@ -80,19 +85,14 @@ echo "  • ~/.config/{$(IFS=,; echo "${CONFIG_LIST[*]}")} → CIRCE"
 [ "$HAVE_IGNORE"   -eq 1 ] && echo "  • .ignore → CIRCE ~/  (fd/ripgrep excludes)"
 [ "$HAVE_TERM"     -eq 1 ] && echo "  • term_session.sh → CIRCE ~/sh/"
 [ "$HAVE_PROOT"    -eq 1 ] && echo "  • proot_dev.sh → CIRCE ~/bin/"
+[ "$HAVE_BOOKOKRAT_SCRIPTS" -eq 1 ] && echo "  • bookokrat-{split,forward,inverse} → CIRCE ~/.local/bin/"
 [ "$HAVE_CONNECT"  -eq 1 ] && echo "  • connect_nvim.sh → ~/  (local)"
-[ "$HAVE_LISTENER" -eq 1 ] && echo "  • mac_open_listener.py → ~/  (local)"
 echo
 
 # ── Local installs (no SSH needed) ───────────────────────────────────────────
 if [ "$HAVE_CONNECT" -eq 1 ]; then
   cp "${SCRIPT_DIR}/connect_nvim.sh" "$HOME/connect_nvim.sh" && chmod +x "$HOME/connect_nvim.sh"
   print_success "✓ connect_nvim.sh → ~/connect_nvim.sh"
-fi
-
-if [ "$HAVE_LISTENER" -eq 1 ]; then
-  cp "${SCRIPT_DIR}/mac_open_listener.py" "$HOME/mac_open_listener.py" && chmod +x "$HOME/mac_open_listener.py"
-  print_success "✓ mac_open_listener.py → ~/mac_open_listener.py"
 fi
 
 # ── Open (or reuse) SSH master ────────────────────────────────────────────────
@@ -109,7 +109,7 @@ _ok_cfg=()
 for cfg in "${CONFIG_LIST[@]}"; do
   # Per-cfg sync policy:
   #   replace: repo's configs/<cfg>/ fully replaces Mac's ~/.config/<cfg>/
-  #            (yazi — uses mac-open opener instead of OS default).
+  #            (yazi — container-specific openers, e.g. bookokrat for PDFs).
   #   overlay: Mac's copy is staged first, repo's configs/<cfg>/* layered on top
   #            (nvim — adds repo plugins without touching user's other plugins).
   #   default: Mac's ~/.config/<cfg> is source of truth.
@@ -117,6 +117,7 @@ for cfg in "${CONFIG_LIST[@]}"; do
   case "$cfg" in
     yazi) _is_replace=1 ;;
     tmux) _is_replace=1 ;;   # repo owns the container tmux.conf (no Mac copy)
+    bookokrat) _is_replace=1 ;;   # repo owns the container bookokrat config
     nvim) _is_overlay=1 ;;
   esac
 
@@ -167,8 +168,17 @@ if [ "$HAVE_PROOT" -eq 1 ]; then
   _staged+=("bin/proot_dev.sh")
 fi
 
+if [ "$HAVE_BOOKOKRAT_SCRIPTS" -eq 1 ]; then
+  mkdir -p "$STAGING/.local/bin"
+  for _s in "${BOOKOKRAT_SCRIPTS[@]}"; do
+    cp "${SCRIPT_DIR}/${_s}" "$STAGING/.local/bin/${_s}"
+    chmod +x "$STAGING/.local/bin/${_s}"
+    _staged+=(".local/bin/${_s}")
+  done
+fi
+
 # Pre-create remote dirs
-remote_ssh "mkdir -p ~/.config ~/sh ~/bin" 2>/dev/null
+remote_ssh "mkdir -p ~/.config ~/sh ~/bin ~/.local/bin" 2>/dev/null
 
 # ONE rsync call for all remote files
 echo

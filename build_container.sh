@@ -16,6 +16,8 @@ REMOTE_HOST="circe.rc.usf.edu"
 # /work is persistent and is the only large FS mounted on compute nodes.
 REMOTE_ROOTFS_DIR="/work/g/${REMOTE_USER}/proot-sb"
 REMOTE_ROOTFS_PATH="${REMOTE_ROOTFS_DIR}/fintech-rootfs.tar"
+# Repo dir — so the build can chain ./sync_configs.sh at the end (one-shot deploy).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Colors for output
 RED='\033[0;31m'
@@ -299,6 +301,18 @@ main() {
   teardown_ssh_mux
   end_timer "HPC transfer process"
 
+  # One-shot: push configs + ~/.local/bin wrappers so the node is fully ready.
+  # sync_configs.sh manages its own SSH mux, so it's safe after teardown above.
+  if [ "${SYNC_CONFIGS:-0}" -eq 1 ]; then
+    echo
+    print_status "Step 4: syncing configs/scripts to CIRCE (./sync_configs.sh)..."
+    if "${SCRIPT_DIR}/sync_configs.sh"; then
+      print_success "✓ Configs/scripts synced to CIRCE"
+    else
+      print_warning "sync_configs.sh failed — run it manually: ./sync_configs.sh"
+    fi
+  fi
+
   # Calculate and display total time
   TOTAL_END_TIME=$(date +%s)
   TOTAL_ELAPSED=$((TOTAL_END_TIME - TOTAL_START_TIME))
@@ -360,13 +374,27 @@ collect_transfer_decisions() {
   read -r -p "Transfer rootfs tar to CIRCE ${REMOTE_ROOTFS_PATH} after build? (y/N): " _r </dev/tty; echo
   [[ $_r =~ ^[Yy]$ ]] && XFER_ROOTFS=1
 
+  # ── configs/scripts (sync_configs.sh) ────────────────────────────────────────
+  # Default YES: this is what makes the build a true one-shot. The rootfs tar
+  # carries the image (incl. the bookokrat binary on the fast node-local rootfs);
+  # sync_configs.sh pushes the configs + ~/.local/bin wrappers. Together the node
+  # is fully ready in one run — no manual steps, and no heavy binaries dumped onto
+  # the at-quota FUSE home.
+  SYNC_CONFIGS=1
+  read -r -p "Also sync configs/scripts (./sync_configs.sh) after build? (Y/n): " _s </dev/tty; echo
+  [[ $_s =~ ^[Nn]$ ]] && SYNC_CONFIGS=0
+
   echo "============================================================"
   if [ "${XFER_ROOTFS:-0}" -eq 1 ]; then
     print_status "Will deploy after build: rootfs tar → CIRCE ${REMOTE_ROOTFS_PATH}"
   else
-    print_status "No deployment selected — rootfs-tar transfer will be skipped"
+    print_status "No rootfs-tar transfer selected"
   fi
-  print_status "To sync configs/scripts separately, run: ./sync_configs.sh"
+  if [ "${SYNC_CONFIGS:-0}" -eq 1 ]; then
+    print_status "Will also run ./sync_configs.sh after build (configs + wrappers)"
+  else
+    print_status "Config/script sync skipped — run ./sync_configs.sh manually if needed"
+  fi
   echo "============================================================"
   echo
 }
@@ -424,13 +452,14 @@ execute_all_transfers() {
 usage() {
   echo "Usage: $0 [OPTIONS]"
   echo
-  echo "Workflow:"
+  echo "Workflow (one-shot — leaves the node fully ready):"
   echo "  1. Build Docker image with Podman (cleans old images first)"
-  echo "  2. Export flat rootfs tar with 'podman export'"
+  echo "  2. Export flat rootfs tar with 'podman export' (incl. the bookokrat binary)"
   echo "  3. Remove built image + prune dangling layers (disk cleanup)"
   echo "  4. Transfer rootfs tar to CIRCE ${REMOTE_ROOTFS_PATH} (optional)"
+  echo "  5. Run ./sync_configs.sh — push configs + ~/.local/bin wrappers (optional, default yes)"
   echo
-  echo "To sync configs/scripts to CIRCE without rebuilding, use:"
+  echo "To sync configs/scripts to CIRCE WITHOUT rebuilding, run on its own:"
   echo "  ./sync_configs.sh"
   echo
   echo "Options:"

@@ -3,7 +3,7 @@
 #
 # CIRCE compute nodes can't run Singularity/Apptainer post-2026 (/apps nosuid +
 # user namespaces disabled). proot is a userspace runtime needing neither. This
-# extracts the rootfs tarball to node-local /tmp on first use and execs proot
+# extracts the rootfs tarball to node-local /tmp on first use and runs proot
 # into zsh; args are forwarded to zsh (e.g. `proot_dev.sh -i -c '...'`).
 #
 # Env overrides: PROOT (~/bin/proot), FINTECH_TAR
@@ -70,32 +70,64 @@ if [ ! -e "$SBX_READY" ]; then
     exec 9>&-
 fi
 
-# ─── Redirect regenerable hot state off the slow network home → node-local /tmp
-# The network home (Quobyte/BeeGFS via FUSE) costs ~16 ms per small-file create
-# vs ~0.3 ms on node-local /tmp — a ~45× metadata penalty, and proot compounds
-# it because every syscall is ptraced (PROOT_NO_SECCOMP=1, mandatory on
-# muma_2021, disables the seccomp fast-path). Tools that churn many small files
-# under $HOME stall as a result; point the worst offenders at /tmp instead.
+# ─── Redirect Claude Code's config dir off the slow network home → node-local
+# Claude's startup is write/fsync-heavy against ~/.claude: a new session file, a
+# shell snapshot, a history append, atomic .claude.json rewrites (write-tmp →
+# fsync → rename), the daemon socket, and statsig/changelog caches. The network
+# home is Quobyte via FUSE and was 100% full; measured under proot it runs
+# writes ~43× slower and fsync ~13× slower than node-local disk (300 writes:
+# 943 ms vs 22 ms; 60 fsyncs: 269 ms vs 21 ms), and proot ptraces every one of
+# those syscalls. A cold first launch balloons into a ~1-minute freeze; warm
+# launches still pay the fsync tax because fsync bypasses the page cache.
 #
-# Same safe guard as the nvim block in /etc/zsh/zshenv: relink only when the
-# source is absent or already a symlink, so a real directory holding data is
-# never hidden. Done host-side here (once per connection, not per shell), but
-# $HOME and /tmp are bound 1:1 into the guest so the links resolve identically
-# inside the container. If a hot dir already exists as a REAL dir on the home,
-# delete it once (it's pure scratch) so the symlink can form:
-#   rm -rf ~/.claude/shell-snapshots ~/.claude/statsig
+# CLAUDE_CONFIG_DIR relocates the whole tree (incl. the relocated .claude.json),
+# so all that churn lands on fast local disk instead. This is node-portable and
+# permanent: $_scratch is re-derived per node from the scratch base proot just
+# picked, so moving to another node automatically uses *that* node's local disk.
+# /tmp (and /dev/shm under /dev) is bound 1:1 into the guest, so the path
+# resolves identically inside proot, and proot passes the env through to zsh.
+#
+# The canonical copy lives on $HOME. We seed the local dir from it on first use
+# per node, and sync the persistent bits (auth + conversation history) back on
+# exit; the regenerable scratch (shell-snapshots/, statsig/, daemon socket) is
+# never copied back.
 _scratch="$(dirname "$FINTECH_SBX")"          # same node-local FS proot picked
-_link_scratch() {                              # $1 = path relative to $HOME
-    local src="$HOME/$1" dst="$_scratch/$1"
-    mkdir -p "$dst" "$(dirname "$src")" 2>/dev/null || return 0
-    if [ -L "$src" ] || [ ! -e "$src" ]; then ln -sfn "$dst" "$src" 2>/dev/null || true; fi
+CC_HOME="$HOME/.claude"
+CC_LOCAL="$_scratch/.claude"
+if [ ! -d "$CC_LOCAL" ]; then                 # first use on this node → seed
+    mkdir -p "$CC_LOCAL" 2>/dev/null || true
+    [ -d "$CC_HOME" ] && cp -a "$CC_HOME/." "$CC_LOCAL/" 2>/dev/null
+    [ -f "$HOME/.claude.json" ] && cp -a "$HOME/.claude.json" "$CC_LOCAL/.claude.json" 2>/dev/null
+fi
+export CLAUDE_CONFIG_DIR="$CC_LOCAL"
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1   # no autoupdater / statsig / error-report calls
+
+# Persist auth + history back to $HOME when the container exits, so credentials
+# and conversation logs survive the per-allocation /tmp wipe. Best-effort and
+# selective: the home was 100% full, so never silently assume a write worked —
+# warn if it didn't. rsync --update ships only changed files (cheap on repeat,
+# cp is the fallback). Concurrent sessions on different nodes merge per-file
+# (last writer wins) — acceptable for a fallback CLI. .claude.json belongs at
+# $HOME/.claude.json (not under .claude/), so it is handled separately.
+_claude_sync_back() {
+    [ -d "$CC_LOCAL" ] || return 0
+    mkdir -p "$CC_HOME" 2>/dev/null
+    local ok=1
+    if command -v rsync >/dev/null 2>&1; then
+        rsync -a --update \
+              --exclude='shell-snapshots' --exclude='statsig' \
+              --exclude='.claude.json' --exclude='*.sock' \
+              "$CC_LOCAL/" "$CC_HOME/" 2>/dev/null || ok=0
+    else
+        local item
+        for item in .credentials.json projects todos history history.jsonl; do
+            [ -e "$CC_LOCAL/$item" ] && { cp -a "$CC_LOCAL/$item" "$CC_HOME/" 2>/dev/null || ok=0; }
+        done
+    fi
+    [ -f "$CC_LOCAL/.claude.json" ] && { cp -a "$CC_LOCAL/.claude.json" "$HOME/.claude.json" 2>/dev/null || ok=0; }
+    [ "$ok" -eq 1 ] || err "warning: Claude config sync-back to $HOME was incomplete (home full?)."
 }
-# Claude Code rewrites a shell snapshot under shell-snapshots/ on EVERY Bash
-# tool call and churns statsig/ telemetry — both pure scratch. (projects/ holds
-# conversation history and ~/.claude.json holds auth, so those stay on the home
-# to survive an allocation.)
-_link_scratch ".claude/shell-snapshots"
-_link_scratch ".claude/statsig"
+trap _claude_sync_back EXIT
 
 # Bind mounts (proot's -b uses the same host:guest syntax as Singularity --bind).
 #
@@ -121,15 +153,6 @@ done
 for _d in "/work/g/$USER" "/work_bgfs/g/$USER" /shares; do
     [ -d "$_d" ] && BINDS+=(-b "$_d:$_d")
 done
-
-# X11 forwarding (VimTeX → sioyek): $DISPLAY/$XAUTHORITY inherit through proot's
-# env automatically, and the TCP display (localhost:60xx) is reachable because
-# proot shares host networking. We only need the SSH-issued xauth cookie file to
-# be visible inside the sandbox. It normally lives in $HOME or /tmp (both bound
-# by -R), but bind it explicitly in case sshd placed it elsewhere (e.g. /run).
-if [ -n "${XAUTHORITY:-}" ] && [ -f "$XAUTHORITY" ]; then
-    BINDS+=(-b "$XAUTHORITY:$XAUTHORITY")
-fi
 
 # SLURM client passthrough: host squeue/sacct + their RHEL-7 libs into
 # /opt/host-slurm (image wrappers exec them with a scoped LD_LIBRARY_PATH).
@@ -169,4 +192,7 @@ done
 # /proc/self/exe note); -w = start in the real $HOME. Default to interactive
 # zsh; forward any args to zsh.
 [ "$#" -eq 0 ] && set -- -i
-exec "$PROOT" -r "$FINTECH_SBX" "${BINDS[@]}" -w "$HOME" /bin/zsh "$@"
+# Not exec'd: this launcher stays the parent so the EXIT trap above (Claude
+# config sync-back) runs after the guest shell quits. Preserve proot's status.
+"$PROOT" -r "$FINTECH_SBX" "${BINDS[@]}" -w "$HOME" /bin/zsh "$@"
+exit $?

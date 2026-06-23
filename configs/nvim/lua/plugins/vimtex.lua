@@ -2,20 +2,23 @@
 -- into ~/.config/nvim/lua/plugins/.  Augments the LazyVim `lang.tex` extra
 -- (which installs lervag/vimtex) with this container's HPC / SSH viewer wiring.
 --
--- VIEWER: sioyek over X11 (native synctex).  sioyek is installed INSIDE the
--- container (Dockerfile Stage 5e) and renders to the Mac's XQuartz over the SSH
--- X11 forward that connect_nvim.sh adds (`-Y`).  Because nvim and sioyek run on
--- the same machine (the compute node), VimTeX's `sioyek` backend gives true
--- synctex both ways:
---   * forward search  <localleader>lv  → jump sioyek to the cursor's PDF spot
---   * inverse search  (click in sioyek) → jump nvim to the source line
--- Inverse search is just a local `nvim --server <v:servername> …` call that
--- VimTeX wires up automatically for method = "sioyek" — no cross-machine bridge.
+-- VIEWER: bookokrat (terminal PDF reader, native synctex).  bookokrat is
+-- installed INSIDE the container (Dockerfile Stage 5f) and draws the PDF inline
+-- via the kitty graphics protocol, which ghostty renders straight over SSH — no
+-- X11/XQuartz, no PDF copy shipped to the Mac.  Because nvim and bookokrat run
+-- on the same machine (the compute node), synctex works both ways:
+--   * forward search  <localleader>lv  → bookokrat-forward opens/jumps the PDF
+--     (it launches bookokrat in a tmux split if no instance is running yet).
+--   * inverse search  (gd / Ctrl-click in bookokrat) → bookokrat-inverse jumps
+--     nvim to the source line via `nvim --server $NVIM`.  Inverse is wired in
+--     ~/.config/bookokrat/config.yaml (synctex_editor: bookokrat-inverse …).
+-- The bookokrat-forward/-split/-inverse wrappers ship to ~/.local/bin (on PATH
+-- inside the container) via sync_configs.sh.
 --
--- This is the deliberate replacement for the old `general`/`mac-open` viewer,
--- which shipped a *copy* of the PDF to the Mac and therefore lost synctex.
--- `mac_open.lua` still handles non-TeX PDFs (snacks-explorer `o`, `gx`, yazi):
--- those keep opening on the Mac so casual browsing works without XQuartz.
+-- This replaces the previous sioyek-over-X11 viewer (removed) and the even
+-- older `mac-open` viewer, which shipped a *copy* of the PDF to the Mac and
+-- therefore lost synctex.  (The Mac-side `mac-open` bridge has since been
+-- removed entirely; `pdf_open.lua` routes other PDF open callsites to bookokrat.)
 --
 -- Note: synctex must be emitted at compile time.  VimTeX's default latexmk
 -- options already include `-synctex=1`, and TinyTeX's engines support it, so no
@@ -30,9 +33,10 @@ return {
     "lervag/vimtex",
     optional = true,
     init = function()
-      vim.g.vimtex_view_method = "sioyek"
-      -- PATH wrapper from Dockerfile Stage 5e (forces Qt xcb + no MIT-SHM).
-      vim.g.vimtex_view_sioyek_exe = "sioyek"
+      -- general viewer → bookokrat-forward <line> <col> <tex> <pdf>.
+      vim.g.vimtex_view_method = "general"
+      vim.g.vimtex_view_general_viewer = "bookokrat-forward"
+      vim.g.vimtex_view_general_options = "@line @col @tex @pdf"
     end,
   },
 }

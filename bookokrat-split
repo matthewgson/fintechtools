@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Open a PDF/EPUB in bookokrat (terminal reader).
+# Inside tmux: launch in a new split pane. Otherwise: run in the current terminal.
+#
+# Synced to CIRCE ~/.local/bin/ by sync_configs.sh (on PATH inside the container,
+# which binds $HOME 1:1). The bookokrat binary itself ships in the image
+# (/usr/local/bin/bookokrat, Dockerfile Stage 5f).
+set -euo pipefail
+
+file=${1:?usage: bookokrat-split <file>}
+
+if [[ -n "${TMUX:-}" ]]; then
+    # split-window runs its command via the shell; %q-quote the path so
+    # spaces and special characters survive that extra shell layer.
+    cmd="bookokrat --zen-mode $(printf '%q' "$file")"
+    # If launched from Neovim (vimtex), carry its server socket into the pane
+    # so bookokrat's SyncTeX inverse search can jump back to that editor.
+    if [[ -n "${NVIM:-}" ]]; then
+        cmd="NVIM=$(printf '%q' "$NVIM") $cmd"
+    fi
+    exec tmux split-window -h "$cmd"
+else
+    exec bookokrat --zen-mode "$file"
+fi

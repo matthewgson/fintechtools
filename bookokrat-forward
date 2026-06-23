@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# vimtex forward search (source -> PDF) for bookokrat.
+# Invoked by vimtex as: bookokrat-forward <line> <col> <tex> <pdf>
+#
+# bookokrat's --synctex-forward only talks to an ALREADY-running instance over a
+# Unix socket. So: try to forward; if no instance is open for this PDF, open it
+# in a tmux split, then retry until the socket comes up.
+#
+# Synced to CIRCE ~/.local/bin/ by sync_configs.sh.
+set -euo pipefail
+
+line=$1 col=$2 tex=$3 pdf=$4
+
+fwd() { bookokrat --synctex-forward "${line}:${col}:${tex}" "$pdf" 2>/dev/null; }
+
+# Already open? Jump and done.
+if fwd; then
+    exit 0
+fi
+
+# Not open yet — launch it in a split (zen mode, $NVIM forwarded), then retry.
+bookokrat-split "$pdf"
+
+for _ in $(seq 1 50); do   # up to ~5s for the instance + socket to come up
+    fwd && exit 0
+    sleep 0.1
+done
+
+# Final attempt without silencing, so any error surfaces to vimtex.
+exec bookokrat --synctex-forward "${line}:${col}:${tex}" "$pdf"

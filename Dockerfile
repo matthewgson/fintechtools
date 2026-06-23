@@ -3,7 +3,7 @@
 FROM ubuntu:24.04
 
 LABEL maintainer="Matthew Son"
-LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Claude Code CLI + TinyTeX + sioyek"
+LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Claude Code CLI + TinyTeX + bookokrat"
 LABEL version="0.8"
 
 # ─── Version pins — bump here to upgrade any tool ────────────────────────────
@@ -17,8 +17,9 @@ ARG RESVG_VERSION=0.47.0
 ARG FZF_VERSION=0.73.1
 ARG ZOXIDE_VERSION=0.9.9
 ARG BOTTOM_VERSION=0.12.3
-# sioyek = VimTeX's synctex-capable PDF viewer; pinned to match the Mac install.
-ARG SIOYEK_VERSION=v2.0.0
+# bookokrat = terminal PDF/EPUB reader (kitty graphics); the primary VimTeX/yazi
+# viewer now — renders in-terminal over SSH, no X11/XQuartz. Pinned to the Mac.
+ARG BOOKOKRAT_VERSION=v0.3.12
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/New_York
@@ -298,105 +299,35 @@ RUN rm -rf /opt/TinyTeX && \
     /usr/local/bin/latexmk --version >/dev/null && \
     /usr/local/bin/pdflatex --version | head -1
 
-# ─── Stage 5e: sioyek + X11 runtime (VimTeX synctex viewer) ─────────────────
-# VimTeX's PDF viewer. Unlike the mac-open bridge (which ships a *copy* of the
-# PDF to the Mac and so cannot carry synctex), sioyek runs INSIDE this container
-# on the compute node and renders to the Mac's XQuartz over SSH X11 forwarding
-# (connect_nvim.sh adds -Y). Because nvim and sioyek are co-located, VimTeX's
-# forward search (<localleader>lv) AND inverse search (click the PDF to jump
-# nvim to the source line) work natively — no cross-machine protocol needed.
-#
-# Two parts:
-#   1. apt: the low-level X11 / xcb / OpenGL / xkbcommon runtime that even the
-#      bundled-Qt sioyek dlopens, plus squashfs-tools (to unpack the AppImage at
-#      build time, below) and xauth (so the container can read the SSH-forwarded
-#      X cookie). libxcb-cursor0 is harmless extra cover should upstream move to
-#      Qt6 later (this 2.0.0 build bundles Qt5).
-#   2. sioyek itself. Upstream ships ONLY an AppImage for Linux (both the
-#      "portable" and plain zips contain the same Sioyek-x86_64.AppImage), pinned
-#      to the same 2.0.0 the Mac runs. AppImages need FUSE to self-mount — which
-#      proot can't provide — and the amd64 runtime can't even exec under this
-#      emulated (arm64-host) build. So we DON'T run it: we compute the squashfs
-#      offset straight from the AppImage's ELF header and unsquashfs the payload.
-#      The unpacked binary (usr/bin/sioyek) self-locates its bundled Qt5 via
-#      RUNPATH=$ORIGIN/../lib and finds the xcb platform plugin via the adjacent
-#      usr/bin/qt.conf, so the PATH wrapper just execs it (xcb forced, MIT-SHM
-#      off for network X).
+# ─── Stage 5e: PDF render fonts (for bookokrat) ─────────────────────────────
+# bookokrat (Stage 5f) renders PDF text via MuPDF, which falls back to system
+# fonts for any glyphs a PDF does not embed; fontconfig + a base font keep that
+# from rendering blank/tofu. No X11/Qt/xcb stack is needed — bookokrat draws
+# in-terminal via the kitty graphics protocol, so unlike the old sioyek viewer
+# it needs no X server (and no XQuartz on the Mac).
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        libgl1 \
-        libegl1 \
-        libopengl0 \
-        libglx-mesa0 \
-        libx11-6 \
-        libx11-xcb1 \
-        libxcb1 \
-        libxcb-cursor0 \
-        libxcb-glx0 \
-        libxcb-icccm4 \
-        libxcb-image0 \
-        libxcb-keysyms1 \
-        libxcb-randr0 \
-        libxcb-render0 \
-        libxcb-render-util0 \
-        libxcb-shape0 \
-        libxcb-shm0 \
-        libxcb-sync1 \
-        libxcb-util1 \
-        libxcb-xfixes0 \
-        libxcb-xinerama0 \
-        libxcb-xkb1 \
-        libxkbcommon0 \
-        libxkbcommon-x11-0 \
-        libxrender1 \
-        libxext6 \
-        libxi6 \
-        libsm6 \
-        libice6 \
-        libdbus-1-3 \
-        libglib2.0-0 \
         fontconfig \
-        fonts-dejavu-core \
-        squashfs-tools \
-        xauth && \
+        fonts-dejavu-core && \
     rm -rf /var/lib/apt/lists/*
 
-RUN SIOYEK_VERSION=${SIOYEK_VERSION} && \
-    echo "Installing sioyek ${SIOYEK_VERSION} (AppImage payload via unsquashfs, no FUSE)" && \
-    curl -fL "https://github.com/ahrm/sioyek/releases/download/${SIOYEK_VERSION}/sioyek-release-linux-portable.zip" \
-        -o /tmp/sioyek.zip && \
-    mkdir -p /tmp/sioyek-zip && \
-    unzip -q /tmp/sioyek.zip -d /tmp/sioyek-zip && \
-    SIOYEK_AI="$(find /tmp/sioyek-zip -type f -name '*.AppImage' | head -1)" && \
-    { [ -n "$SIOYEK_AI" ] || { echo "ERROR: no .AppImage inside sioyek zip" >&2; exit 1; }; } && \
-    printf '%s\n' \
-        'import struct,sys' \
-        'd=open(sys.argv[1],"rb").read(64)' \
-        'shoff=struct.unpack_from("<Q",d,0x28)[0]' \
-        'shentsize=struct.unpack_from("<H",d,0x3a)[0]' \
-        'shnum=struct.unpack_from("<H",d,0x3c)[0]' \
-        'print(shoff+shentsize*shnum)' \
-        > /tmp/elf_end.py && \
-    SIOYEK_OFF="$(python3 /tmp/elf_end.py "$SIOYEK_AI")" && \
-    echo "sioyek AppImage squashfs offset: $SIOYEK_OFF" && \
-    mkdir -p /opt/sioyek && \
-    unsquashfs -f -d /opt/sioyek -o "$SIOYEK_OFF" "$SIOYEK_AI" && \
-    { [ -x /opt/sioyek/usr/bin/sioyek ] || { echo "ERROR: sioyek binary missing after unsquashfs" >&2; exit 1; }; } && \
-    rm -rf /tmp/sioyek.zip /tmp/sioyek-zip /tmp/elf_end.py && \
-    printf '%s\n' \
-        '#!/bin/sh' \
-        '# sioyek launch wrapper (Dockerfile Stage 5e).' \
-        '# Force the xcb platform and disable MIT-SHM (unavailable over network X /' \
-        '# XQuartz-via-SSH; otherwise Qt crashes or renders blank). The binary self-' \
-        '# locates its bundled Qt5 via RUNPATH ($ORIGIN/../lib) and usr/bin/qt.conf;' \
-        '# LD_LIBRARY_PATH is belt-and-suspenders.' \
-        'export QT_QPA_PLATFORM=xcb' \
-        'export QT_X11_NO_MITSHM=1' \
-        'export LD_LIBRARY_PATH="/opt/sioyek/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' \
-        'exec /opt/sioyek/usr/bin/sioyek "$@"' \
-        > /usr/local/bin/sioyek && \
-    chmod +x /usr/local/bin/sioyek && \
-    echo "sioyek installed -> /opt/sioyek/usr/bin/sioyek"
+# ─── Stage 5f: bookokrat (primary terminal PDF/EPUB viewer) ─────────────────
+# Terminal reader that draws PDFs inline via the kitty graphics protocol, which
+# ghostty speaks — so VimTeX/yazi PDF viewing works straight over SSH with no
+# X11/XQuartz (no X server needed at all). Prebuilt static-ish
+# x86_64 gnu binary from upstream releases; the synctex wrapper scripts
+# (bookokrat-forward/-split/-inverse) ship via sync_configs.sh into ~/.local/bin.
+RUN BOOKOKRAT_VERSION=${BOOKOKRAT_VERSION} && \
+    echo "Installing bookokrat ${BOOKOKRAT_VERSION}" && \
+    curl -fL "https://github.com/bugzmanov/bookokrat/releases/download/${BOOKOKRAT_VERSION}/bookokrat-${BOOKOKRAT_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+        -o /tmp/bookokrat.tar.gz && \
+    mkdir -p /tmp/bookokrat-x && \
+    tar -C /tmp/bookokrat-x -xzf /tmp/bookokrat.tar.gz && \
+    BK_BIN="$(find /tmp/bookokrat-x -type f -name bookokrat | head -1)" && \
+    { [ -n "$BK_BIN" ] || { echo "ERROR: bookokrat binary missing in tarball" >&2; exit 1; }; } && \
+    install -m 0755 "$BK_BIN" /usr/local/bin/bookokrat && \
+    rm -rf /tmp/bookokrat.tar.gz /tmp/bookokrat-x && \
+    /usr/local/bin/bookokrat --version
 
 # ─── Stage 6: Neovim (pinned stable binary, x86_64) ─────────────────────────
 RUN NVIM_VERSION=${NVIM_VERSION} && \
@@ -453,14 +384,6 @@ RUN ZOXIDE_VERSION=${ZOXIDE_VERSION} && \
     tar -C /usr/local/bin -xzf /tmp/zoxide.tar.gz zoxide && \
     chmod +x /usr/local/bin/zoxide && \
     rm /tmp/zoxide.tar.gz
-
-# ─── Stage 8d: mac-open bridge ──────────────────────────────────────────────
-# Pure-Python client that ships files/URLs to the Mac for opening.  Pairs with
-# mac_open_listener.py running on the Mac and the SSH -R 8765 reverse forward
-# in connect_nvim.sh.  No external deps — edit mac_open.py at the repo root
-# to extend behavior; this stage just installs it.
-COPY mac_open.py /usr/local/bin/mac-open
-RUN chmod +x /usr/local/bin/mac-open
 
 # ─── Stage 8e: bottom (process/system monitor — replaces htop) ───────────────
 RUN BOTTOM_VERSION=${BOTTOM_VERSION} && \
