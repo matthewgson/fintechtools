@@ -43,3 +43,37 @@ fi
 # ATTACHES to the named session if it's live (reusing your panes), else creates
 # it. Pass a name to use a session other than `main`.
 tm() { tmux new-session -A -s "${1:-main}"; }
+
+# === Self-heal nvim plugins reaped by /tmp's age-cleaner ======================
+# nvim's plugin store (~/.local/share/nvim) is symlinked to node-local /tmp for
+# fast startup (see the image's /etc/zsh/zshenv). But systemd-tmpfiles
+# age-prunes /tmp (/usr/lib/tmpfiles.d/tmp.conf: `D /tmp ... 30d`), so on a
+# long-lived node it deletes the thousands of individual plugin *source* files
+# while leaving each plugin's compact .git intact. LazyVim then sees the plugin
+# as installed and runs its `config`, but require() can't find the module →
+# "module not found" for nvim-treesitter / trouble / blink.cmp / R.nvim / ….
+#
+# `git checkout -f` rebuilds each working tree from the surviving local git
+# objects — offline, instant, no re-clone — and leaves untracked files (avante /
+# blink native *.so) alone. Canary-gated: a healthy launch costs only a few
+# stat()s; the full restore runs only when a hot plugin's worktree was reaped.
+_nvim_heal() {
+  local lazy="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy"
+  [ -d "$lazy" ] || return 0
+  local c hit=0
+  for c in LazyVim/lua/lazyvim/init.lua blink.cmp/lua/blink/cmp/init.lua \
+           nvim-treesitter/lua/nvim-treesitter/init.lua \
+           trouble.nvim/lua/trouble/init.lua snacks.nvim/lua/snacks/init.lua; do
+    [ -d "$lazy/${c%%/*}/.git" ] && [ ! -f "$lazy/$c" ] && { hit=1; break; }
+  done
+  (( hit )) || return 0
+  print -u2 "nvim: restoring plugin files reaped from /tmp (git checkout -f)…"
+  local d
+  for d in "$lazy"/*/.git(N); do
+    d="${d:h}"
+    git -C "$d" checkout -f >/dev/null 2>&1
+  done
+}
+nvim() { _nvim_heal; command nvim "$@"; }
+alias vi=nvim
+alias vim=nvim
