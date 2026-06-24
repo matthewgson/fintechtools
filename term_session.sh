@@ -16,17 +16,23 @@
 # but drops GPU request, CUDA module load, and /apps/cuda bind so the job
 # runs on any muma_2021 node (CUDA tree isn't guaranteed on non-GPU nodes).
 
-# ─── Container runtime: proot (post-2026 maintenance) ────────────────────────
+# ─── Container runtime: udocker (default) or proot (fallback) ────────────────
 # Singularity/Apptainer can't start containers on compute nodes (/apps nosuid +
-# user namespaces disabled). We launch via proot instead — a userspace runtime
-# needing neither. proot_dev.sh extracts the rootfs to node-local /tmp and execs
-# proot. See proot_dev.sh and the README.
-PROOT_LAUNCHER="$HOME/bin/proot_dev.sh"
+# user namespaces disabled). Both options below are userspace and need neither:
+#   udocker (Fakechroot/F3) — LD_PRELOAD libc interception, ~5x faster on our
+#     metadata-heavy workload (no ptrace tax). The default.
+#   proot — ptrace-based; the stable fallback. Select with CONTAINER_RUNTIME=proot.
+# Each launcher does its own per-node setup (extract / import+F3) on /tmp.
+CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-udocker}"
+case "$CONTAINER_RUNTIME" in
+  udocker) LAUNCHER="$HOME/bin/udocker_dev.sh" ;;
+  proot|*) LAUNCHER="$HOME/bin/proot_dev.sh"; CONTAINER_RUNTIME=proot ;;
+esac
 ROOTFS_TAR="/work/g/$USER/proot-sb/fintech-rootfs.tar"
-echo "Container runtime: proot (userspace; no setuid, no user namespaces)"
-if [ ! -x "$PROOT_LAUNCHER" ] || [ ! -f "$ROOTFS_TAR" ]; then
-  echo "❌ ERROR: missing launcher ($PROOT_LAUNCHER) or rootfs tar ($ROOTFS_TAR)."
-  echo "   Run the one-time setup in the README (install proot to ~/bin; build the rootfs tar)."
+echo "Container runtime: $CONTAINER_RUNTIME (userspace; no setuid, no user namespaces)"
+if [ ! -x "$LAUNCHER" ] || [ ! -f "$ROOTFS_TAR" ]; then
+  echo "❌ ERROR: missing launcher ($LAUNCHER) or rootfs tar ($ROOTFS_TAR)."
+  echo "   Run the one-time setup in the README (install the launcher to ~/bin; build the rootfs tar)."
   exit 1
 fi
 
@@ -79,17 +85,18 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Start Time: $START_TIME"
 echo "Compute Node: $COMPUTE_NODE"
 echo "Node IP: $NODE_IP"
-echo "Container: fintech-tools rootfs via proot (CPU only)"
-echo "Connect: ssh -J gson@$LOGIN_NODE -t gson@$COMPUTE_NODE '~/bin/proot_dev.sh -i'"
+echo "Container: fintech-tools rootfs via $CONTAINER_RUNTIME (CPU only)"
+echo "Connect: ssh -J gson@$LOGIN_NODE -t gson@$COMPUTE_NODE '$LAUNCHER -i'"
 echo "========================================="
 
-# ─── Pre-warm the node-local sandbox ─────────────────────────────────────────
-# proot has no persistent "instance" — each SSH connection runs its own proot
-# against the shared node-local sandbox. Extract it once here so the first
-# ./connect_nvim.sh is instant instead of waiting ~50 s for extraction.
-echo "Pre-extracting container rootfs to node-local scratch (first run only)..."
-if ! "$PROOT_LAUNCHER" -c 'echo "✓ sandbox ready: $(head -1 /etc/os-release)"'; then
-  echo "❌ ERROR: proot could not launch the container rootfs"
+# ─── Pre-warm the node-local container ───────────────────────────────────────
+# Neither runtime has a persistent daemon — each SSH connection runs its own
+# process tree against the shared node-local container on /tmp. Do the one-time
+# per-node setup here (proot: extract ~50 s; udocker: import+create+F3 ~1.5 min)
+# so the first ./connect_nvim.sh is instant instead of waiting on it.
+echo "Pre-warming the node-local container ($CONTAINER_RUNTIME; first run only)..."
+if ! "$LAUNCHER" -c 'echo "✓ container ready: $(head -1 /etc/os-release)"'; then
+  echo "❌ ERROR: $CONTAINER_RUNTIME could not launch the container"
   exit 1
 fi
 
@@ -101,7 +108,7 @@ echo "   ./connect_nvim.sh"
 echo ""
 echo " Or manually:"
 echo "   ssh -J gson@$LOGIN_NODE -t gson@$COMPUTE_NODE \\"
-echo "     '~/bin/proot_dev.sh -i'"
+echo "     '$LAUNCHER -i'"
 echo ""
 echo " Reconnect freely from another shell — each connection launches its own"
 echo " proot against the shared node-local sandbox."

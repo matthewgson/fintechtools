@@ -6,7 +6,7 @@
 #   ./connect_nvim.sh              # auto-find job and connect
 #   ./connect_nvim.sh <node>       # connect directly to a known node
 #
-# Drops into an interactive zsh inside the container (launched via proot).
+# Drops into an interactive zsh inside the container (launched via udocker/proot).
 # Start tmux/nvim manually from there if you want a persistent layout:
 #   tm   (= tmux new-session -A -s main; attaches if it already exists)
 #
@@ -19,6 +19,11 @@ LOGIN_ALIAS="circe"
 REMOTE_USER="gson"
 # Target compute node — matches #SBATCH --nodelist in term_session.sh
 TARGET_NODE="mdc-1057-13-13"
+
+# Container launcher to run on the compute node. Default matches term_session.sh
+# (CONTAINER_RUNTIME=udocker); set CONTAINER_LAUNCHER=proot_dev.sh for the proot
+# fallback. Both forward args to zsh, so `-i -c '...'` behaves identically.
+LAUNCHER="${CONTAINER_LAUNCHER:-udocker_dev.sh}"
 
 # ─── Find compute node ────────────────────────────────────────────────────────
 if [ -n "$1" ]; then
@@ -76,11 +81,11 @@ unset _sz
 # SSH (no XQuartz, no -Y forwarding, no mac-open reverse tunnel).
 
 # Singularity/Apptainer can't start containers on compute nodes post-2026, so we
-# launch via ~/bin/proot_dev.sh instead (userspace proot). It forwards args to
-# zsh, so `-i -c '...'` behaves like the old `singularity exec ... zsh -i -c`.
+# launch via ~/bin/$LAUNCHER instead (userspace udocker/proot). It forwards args
+# to zsh, so `-i -c '...'` behaves like the old `singularity exec ... zsh -i -c`.
 ssh \
     -J "$LOGIN_ALIAS" \
     -tt \
     "$REMOTE_USER@$NODE" \
     "TERM=xterm-256color COLUMNS=$COLS LINES=$ROWS _SSH_COLS=$COLS _SSH_ROWS=$ROWS \
-     ~/bin/proot_dev.sh -i -c 'stty cols $COLS rows $ROWS 2>/dev/null; exec zsh -i'"
+     ~/bin/$LAUNCHER -i -c 'stty cols $COLS rows $ROWS 2>/dev/null; exec zsh -i'"
