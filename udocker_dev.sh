@@ -112,10 +112,12 @@ fi
 # Resolve the container ROOT (host path) for the fakechroot-lib hint + slurm dirs.
 _root="$(udocker inspect -p "$UDOCKER_CONTAINER" 2>/dev/null || true)"
 
-# Point udocker at a glibc-matched libfakechroot if the image ships one — silences
-# the "OS might not be supported" warning on Ubuntu 24.04 / glibc 2.39 and
-# guarantees correct path translation. Built into the image at /opt/fakechroot/lib
-# by a Dockerfile stage (TODO); harmlessly skipped while that's absent.
+# Defensive hook: if a glibc-2.39-matched libfakechroot is ever dropped at
+# /opt/fakechroot/lib (would silence the "OS might not be supported" warning and
+# fix NSS/uid resolution), use it. None currently exists — the udocker fakechroot
+# fork won't compile on glibc 2.39 and no bundled variant resolves NSS here
+# (verified 2026-06-24) — so this is a no-op today and the bare-uid id/whoami is
+# an accepted cosmetic limitation.
 if [ -n "$_root" ] && [ -f "$_root/opt/fakechroot/lib/libfakechroot.so" ]; then
     export UDOCKER_FAKECHROOT_SO="$_root/opt/fakechroot/lib/libfakechroot.so"
 fi
@@ -195,11 +197,11 @@ fi
 # write to ~, e.g. starship's cache), zsh as SHELL, the Claude redirect, and the
 # no-telemetry flag.
 # Note: under F3/fakechroot, glibc NSS (getpwuid/getpwnam) can't resolve our uid
-# to a name, so `id -un`/`whoami` show the bare number even with a correct
-# /etc/passwd entry — the bundled fakechroot lib doesn't match the container's
-# glibc 2.39 (the "OS might not be supported" warning). A glibc-2.39 libfakechroot
-# baked into the image (Dockerfile stage TODO) is the real fix; meanwhile export
-# USER/LOGNAME so the prompt and tools that read them still show the right name.
+# to a name, so `id -un`/`whoami` show the bare number. This is an ACCEPTED
+# cosmetic limitation — a glibc-2.39-matched libfakechroot would fix it, but the
+# udocker fakechroot fork won't compile on glibc 2.39 and no bundled variant
+# works (verified 2026-06-24). We export USER/LOGNAME so the prompt and tools
+# that read them still show the right name; functionally everything works.
 ENVS=( --env="HOME=$HOME"
        --env="USER=$USER"
        --env="LOGNAME=$USER"

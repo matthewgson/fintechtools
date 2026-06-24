@@ -413,36 +413,15 @@ RUN CATPPUCCIN_TMUX_VERSION=${CATPPUCCIN_TMUX_VERSION} && \
 # Terminal multiplexer (tmux) is installed from apt in Stage 1 — see the note
 # there for why tmux replaced zellij in this image.
 
-# ─── Stage 8g: glibc-matched libfakechroot for udocker (Fakechroot/F3) ───────
-# When this image is launched via udocker's F3 engine (the lower-overhead, non-
-# ptrace alternative to proot — see udocker_dev.sh), udocker LD_PRELOADs a
-# libfakechroot.so to do its path translation. Its *bundled* libs don't match
-# this image's glibc (Ubuntu 24.04 / 2.39), so F3 warns "OS might not be
-# supported" and, more visibly, glibc NSS getpwuid() can't resolve our uid →
-# `id`/`whoami`/the shell prompt show a bare number. Building udocker's own
-# fakechroot fork against THIS image's glibc fixes both. udocker_dev.sh auto-
-# detects the result at /opt/fakechroot/lib/libfakechroot.so (UDOCKER_FAKECHROOT_SO)
-# and silently skips it when absent.
-#
-# Best-effort and non-fatal: a build failure only logs a warning and leaves the
-# image otherwise complete (F3 then keeps the bundled lib — same as before, no
-# regression). Irrelevant to the proot runtime, which doesn't use fakechroot.
-RUN set -e; \
-    apt-get update && apt-get install -y --no-install-recommends \
-        build-essential autoconf automake libtool pkg-config git ca-certificates; \
-    ( set -e; \
-      git clone --depth 1 https://github.com/jorge-lip/libfakechroot-glibc-udocker /tmp/lfc; \
-      cd /tmp/lfc; \
-      ( ./autogen.sh || autoreconf -fi ); \
-      ./configure; \
-      make -j"$(nproc)"; \
-      mkdir -p /opt/fakechroot/lib; \
-      cp -a src/.libs/libfakechroot.so* /opt/fakechroot/lib/; \
-      [ -e /opt/fakechroot/lib/libfakechroot.so ] || \
-        ln -sf "$(cd /opt/fakechroot/lib && ls libfakechroot.so.* | head -1)" /opt/fakechroot/lib/libfakechroot.so; \
-      echo "libfakechroot built:"; ls -l /opt/fakechroot/lib/ ) \
-    || echo "WARNING: libfakechroot build failed — udocker F3 keeps its bundled lib (uid resolution stays cosmetic)"; \
-    rm -rf /tmp/lfc /var/lib/apt/lists/*
+# NOTE: no glibc-matched libfakechroot is baked in for udocker's F3 mode. Under
+# F3, glibc NSS getpwuid() can't resolve our uid, so id/whoami show a bare number
+# (cosmetic — udocker_dev.sh exports USER/LOGNAME; every tool works). The proper
+# fix would be a libfakechroot matched to this image's glibc 2.39, but (verified
+# 2026-06-24) the udocker fakechroot fork (jorge-lip/libfakechroot-glibc-udocker)
+# uses the pre-2.33 __xstat64/_STAT_VER API and won't compile on glibc 2.39, and
+# none of udocker's bundled variants resolve NSS here. udocker_dev.sh still picks
+# up /opt/fakechroot/lib/libfakechroot.so if one ever appears. Revisit if udocker
+# ships a glibc-2.39 fakechroot.
 
 # ─── Stage 10: GitHub CLI ────────────────────────────────────────────────────
 RUN mkdir -p -m 755 /etc/apt/keyrings && \
