@@ -85,12 +85,18 @@ mkdir -p "$UDOCKER_DIR" || exit 1
 # eager connect. F3 patchelf's the binaries to absolute container paths, so it must
 # be redone per node (udocker F-mode containers aren't portable across hosts).
 F3_READY="$UDOCKER_DIR/.f3-ready"
-if [ ! -e "$F3_READY" ]; then
+# Re-run setup when the marker is missing OR the rootfs tar is newer than it: a
+# rebuilt image must replace this node's container (same stale-sandbox lesson as
+# proot — a new tar on /work or $HOME wouldn't otherwise be picked up until /tmp
+# is wiped). The setup below rm's any existing container/image first, so this is
+# also the auto-update path after build_container.sh ships a new tar.
+_need_setup() { [ ! -e "$F3_READY" ] || [ "$FINTECH_TAR" -nt "$F3_READY" ]; }
+if _need_setup; then
     [ -f "$FINTECH_TAR" ] || { err "rootfs tarball not found at $FINTECH_TAR"; exit 1; }
     exec 9>"$UDOCKER_DIR/.setup.lock"
     command -v flock >/dev/null 2>&1 && flock 9
-    if [ ! -e "$F3_READY" ]; then   # re-check: another process may have just finished
-        err "udocker first-use setup on $(hostname -s) (install + import + create + F3) ..."
+    if _need_setup; then   # re-check under the lock
+        err "udocker setup on $(hostname -s) (install + import + create + F3; tar=$FINTECH_TAR) ..."
         udocker install 1>&2 || { err "udocker install (tools) failed"; exit 1; }
         udocker rm  "$UDOCKER_CONTAINER" >/dev/null 2>&1 || true   # clean partial state
         udocker rmi "$UDOCKER_IMAGE"      >/dev/null 2>&1 || true

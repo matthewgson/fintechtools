@@ -12,9 +12,11 @@ VERSION="0.8"
 ROOTFS_TAR="$HOME/fintech-rootfs.tar"
 REMOTE_USER="gson"
 REMOTE_HOST="circe.rc.usf.edu"
-# Rootfs tar destination on CIRCE.
-# /work is persistent and is the only large FS mounted on compute nodes.
-REMOTE_ROOTFS_DIR="/work/g/${REMOTE_USER}/proot-sb"
+# Rootfs tar destination on CIRCE. Home is persistent AND backed up (unlike
+# /work, purged at 6 months); the tar is read only once per node at unpack, so
+# its slightly slower bulk read off the home FS doesn't affect runtime. Both
+# launchers prefer this home path and fall back to the old /work location.
+REMOTE_ROOTFS_DIR="/home/g/${REMOTE_USER}/proot-sb"
 REMOTE_ROOTFS_PATH="${REMOTE_ROOTFS_DIR}/fintech-rootfs.tar"
 # Repo dir — so the build can chain ./sync_configs.sh at the end (one-shot deploy).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -182,12 +184,24 @@ purge_old_images() {
 # SSH connection multiplexer
 
 setup_ssh_mux() {
-  SSH_CONTROL_SOCKET="$(mktemp -u /tmp/circe_mux_XXXXXX)"
+  # Reuse the SHARED master socket (~/.ssh/circe_mux) that sync_configs.sh and
+  # interactive sessions keep open — so if a connection is already up there's no
+  # new login at all. A private throwaway socket (the old behaviour) forced a
+  # fresh auth that CIRCE's 2FA breaks under a backgrounded `ssh -fNM`, which is
+  # why it warned "multiplexing unavailable" and then prompted on every transfer.
+  SSH_CONTROL_SOCKET="$HOME/.ssh/circe_mux"
+  mkdir -p "$(dirname "${SSH_CONTROL_SOCKET}")" 2>/dev/null
+  if ssh -O check -o ControlPath="${SSH_CONTROL_SOCKET}" "${REMOTE_USER}@${REMOTE_HOST}" 2>/dev/null; then
+    print_success "✓ Reusing existing SSH connection to ${REMOTE_HOST} (multiplexed)"
+    return 0
+  fi
   print_status "Opening SSH connection to ${REMOTE_HOST} (enter password once for all transfers)..."
   if ssh -fNM \
     -o ControlMaster=yes \
     -o ControlPath="${SSH_CONTROL_SOCKET}" \
-    -o ControlPersist=30m \
+    -o ControlPersist=2h \
+    -o ServerAliveInterval=60 \
+    -o ServerAliveCountMax=3 \
     "${REMOTE_USER}@${REMOTE_HOST}"; then
     print_success "✓ SSH connection established (multiplexed)"
   else
@@ -197,9 +211,9 @@ setup_ssh_mux() {
 }
 
 teardown_ssh_mux() {
-  [ -z "$SSH_CONTROL_SOCKET" ] && return
-  ssh -O exit -o ControlPath="${SSH_CONTROL_SOCKET}" "${REMOTE_USER}@${REMOTE_HOST}" 2>/dev/null || true
-  rm -f "${SSH_CONTROL_SOCKET}"
+  # Leave the shared ~/.ssh/circe_mux master alive — ControlPersist reaps it, and
+  # sync_configs.sh (chained after the build) plus your own sessions reuse it.
+  # Just drop our reference; do NOT `ssh -O exit` the shared socket.
   SSH_CONTROL_SOCKET=""
 }
 
@@ -429,8 +443,10 @@ execute_all_transfers() {
     _te=$(date +%s); _tt=$((_te - _ts))
     print_success "✓ Rootfs tar transferred to CIRCE in ${_tt}s"
     send_pushover_notification "✅ Transfer Complete" "Rootfs tar transferred to CIRCE in ${_tt}s."
-    print_status "On a fresh node it extracts automatically; to refresh an already-extracted"
-    print_status "node, clear its sandbox: rm -rf /tmp/\$USER/fintech-sbx"
+    print_status "On a fresh node the container is unpacked automatically. Both launchers"
+    print_status "now auto-refresh when this tar is newer than the unpacked copy (no manual"
+    print_status "step). To force it on a busy node: rm -rf /tmp/\$USER/.udocker (udocker) or"
+    print_status "/tmp/\$USER/fintech-sbx (proot)."
     # Offer to remove the local tar — it's large (~10 GB) and no longer needed
     # after a successful transfer. The next build overwrites it anyway.
     local _tar_size

@@ -11,7 +11,15 @@
 set -uo pipefail
 
 PROOT="${PROOT:-$HOME/bin/proot}"
-FINTECH_TAR="${FINTECH_TAR:-/work/g/$USER/proot-sb/fintech-rootfs.tar}"
+# Prefer the persistent home copy of the rootfs tar, fall back to the legacy
+# /work copy (build_container.sh ships to ~/proot-sb now; older runs used /work).
+FINTECH_TAR="${FINTECH_TAR:-}"
+if [ -z "$FINTECH_TAR" ]; then
+    for _t in "$HOME/proot-sb/fintech-rootfs.tar" "/work/g/$USER/proot-sb/fintech-rootfs.tar"; do
+        [ -f "$_t" ] && { FINTECH_TAR="$_t"; break; }
+    done
+    FINTECH_TAR="${FINTECH_TAR:-/work/g/$USER/proot-sb/fintech-rootfs.tar}"
+fi
 
 err() { echo "proot_dev: $*" >&2; }
 
@@ -54,13 +62,21 @@ fi
 # An flock serializes the batch pre-warm against an eager connect so the second
 # one waits for a complete sandbox instead of execve'ing a half-written binary.
 SBX_READY="$FINTECH_SBX/.extracted-ok"
-if [ ! -e "$SBX_READY" ]; then
+# Re-extract when the marker is missing OR the rootfs tar is newer than it: a
+# rebuilt image must replace a node's already-extracted sandbox, else a new tar
+# isn't picked up until /tmp is wiped (mirrors udocker_dev.sh's auto-refresh).
+_need_extract() { [ ! -e "$SBX_READY" ] || [ "$FINTECH_TAR" -nt "$SBX_READY" ]; }
+if _need_extract; then
     [ -f "$FINTECH_TAR" ] || { err "rootfs tarball not found at $FINTECH_TAR"; exit 1; }
     mkdir -p "$FINTECH_SBX" || exit 1
     exec 9>"$FINTECH_SBX/.extract.lock"
     command -v flock >/dev/null 2>&1 && flock 9
-    if [ ! -e "$SBX_READY" ]; then   # re-check: another process may have just finished
-        err "extracting container rootfs -> $FINTECH_SBX (first use on $(hostname -s)) ..."
+    if _need_extract; then   # re-check under the lock
+        # Refreshing a newer tar: clear the stale sandbox first (keeping the lock we
+        # hold) so files removed in the new image don't linger.
+        [ -e "$SBX_READY" ] && { err "newer rootfs tar — refreshing sandbox on $(hostname -s) ..."; \
+            find "$FINTECH_SBX" -mindepth 1 -maxdepth 1 ! -name '.extract.lock' -exec rm -rf {} + 2>/dev/null; }
+        err "extracting container rootfs -> $FINTECH_SBX on $(hostname -s) ..."
         if ! tar -xpf "$FINTECH_TAR" -C "$FINTECH_SBX" --no-same-owner 2>/dev/null; then
             err "extraction failed"; exit 1
         fi
