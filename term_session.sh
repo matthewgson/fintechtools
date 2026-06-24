@@ -16,26 +16,16 @@
 # but drops GPU request, CUDA module load, and /apps/cuda bind so the job
 # runs on any muma_2021 node (CUDA tree isn't guaranteed on non-GPU nodes).
 
-# ─── Container runtime: udocker (default) or proot (fallback) ────────────────
+# ─── Container runtime: udocker (Fakechroot/F3) ─────────────────────────────
 # Singularity/Apptainer can't start containers on compute nodes (/apps nosuid +
-# user namespaces disabled). Both options below are userspace and need neither:
-#   udocker (Fakechroot/F3) — LD_PRELOAD libc interception, ~5x faster on our
-#     metadata-heavy workload (no ptrace tax). The default.
-#   proot — ptrace-based; the stable fallback. Select with CONTAINER_RUNTIME=proot.
-# Each launcher does its own per-node setup (extract / import+F3) on /tmp.
-CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-udocker}"
-case "$CONTAINER_RUNTIME" in
-  udocker) LAUNCHER="$HOME/bin/udocker_dev.sh" ;;
-  proot|*) LAUNCHER="$HOME/bin/proot_dev.sh"; CONTAINER_RUNTIME=proot ;;
-esac
-# rootfs tar: prefer the persistent home copy, fall back to the legacy /work copy
-# (this is just a pre-flight existence check; the launcher resolves its own path).
-ROOTFS_TAR=""
-for _t in "$HOME/proot-sb/fintech-rootfs.tar" "/work/g/$USER/proot-sb/fintech-rootfs.tar"; do
-  [ -f "$_t" ] && { ROOTFS_TAR="$_t"; break; }
-done
-ROOTFS_TAR="${ROOTFS_TAR:-$HOME/proot-sb/fintech-rootfs.tar}"
-echo "Container runtime: $CONTAINER_RUNTIME (userspace; no setuid, no user namespaces)"
+# user namespaces disabled). udocker's F3 engine needs neither — it does pathname
+# translation via an LD_PRELOAD'd libc shim (no ptrace tax, ~5x faster than the
+# old ptrace runtime on our metadata-heavy workload). It does its own per-node
+# setup (import + create + F3) on node-local /tmp.
+LAUNCHER="$HOME/bin/udocker_dev.sh"
+# rootfs tar (pre-flight existence check; the launcher resolves its own path).
+ROOTFS_TAR="$HOME/fintech-sb/fintech-rootfs.tar"
+echo "Container runtime: udocker (Fakechroot/F3; no setuid, no user namespaces)"
 if [ ! -x "$LAUNCHER" ] || [ ! -f "$ROOTFS_TAR" ]; then
   echo "❌ ERROR: missing launcher ($LAUNCHER) or rootfs tar ($ROOTFS_TAR)."
   echo "   Run the one-time setup in the README (install the launcher to ~/bin; build the rootfs tar)."
@@ -52,9 +42,9 @@ export GID=$$
 cleanup() {
   echo "Performing cleanup operations..."
 
-  # proot has no persistent instance/daemon to stop: each SSH connection runs
-  # its own proot process tree that exits with that session.  The node-local
-  # sandbox under /tmp is reclaimed automatically when the allocation ends.
+  # udocker has no persistent instance/daemon to stop: each SSH connection runs
+  # its own container process tree that exits with that session.  The node-local
+  # container under /tmp is reclaimed automatically when the allocation ends.
 
   # Kill the process group
   kill -SIGINT -$GID 2>/dev/null
@@ -98,7 +88,7 @@ echo "========================================="
 # ─── Pre-warm the node-local container ───────────────────────────────────────
 # Neither runtime has a persistent daemon — each SSH connection runs its own
 # process tree against the shared node-local container on /tmp. Do the one-time
-# per-node setup here (proot: extract ~50 s; udocker: import+create+F3 ~1.5 min)
+# per-node setup here (udocker: import + create + F3, ~1.5 min)
 # so the first ./connect_nvim.sh is instant instead of waiting on it.
 echo "Pre-warming the node-local container ($CONTAINER_RUNTIME; first run only)..."
 if ! "$LAUNCHER" -c 'echo "✓ container ready: $(head -1 /etc/os-release)"'; then
@@ -117,8 +107,8 @@ echo "   ssh -J gson@$LOGIN_NODE -t gson@$COMPUTE_NODE \\"
 echo "     '$LAUNCHER -i'"
 echo ""
 echo " Reconnect freely from another shell — each connection launches its own"
-echo " proot against the shared node-local sandbox."
-echo " For persistent panes, use tmux (fast under proot: ~0.03s to create) and"
+echo " container against the shared node-local /tmp."
+echo " For persistent panes, use tmux (fast: ~0.03s to create) and"
 echo " ATTACH to a named session so the same panes survive reconnects:"
 echo "   tm                       # helper in .zshrc = tmux new-session -A -s main"
 echo "   tmux new-session -A -s main   # the explicit form, if you prefer"

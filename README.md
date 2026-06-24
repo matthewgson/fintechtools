@@ -30,15 +30,15 @@ config sync automatically; run `sync_configs.sh` on its own only when you change
 configs without rebuilding):
 
 ```bash
-./sync_configs.sh   # push to CIRCE: term_session.sh → ~/sh/, proot_dev.sh → ~/bin/,
+./sync_configs.sh   # push to CIRCE: term_session.sh → ~/sh/, udocker_dev.sh → ~/bin/,
                     # bookokrat-{split,forward,inverse} → ~/.local/bin/,
-                    # and ~/.config/{nvim,yazi,tmux,bookokrat,…}
+                    # and ~/.config/{nvim,yazi,tmux,bookokrat,starship,…}
 ```
 
 Daily use: `sbatch ~/sh/term_session.sh`, then `./connect_nvim.sh` from the Mac.
-The launcher extracts the rootfs to node-local `/tmp` and enters the container.
-After a rebuild, clear an already-extracted node's sandbox to pick up the
-new image: `rm -rf /tmp/$USER/fintech-sbx`.
+The launcher (udocker, Fakechroot/F3) imports the rootfs into node-local `/tmp`
+and enters the container. It auto-refreshes when the tar is newer than the
+unpacked copy, so a rebuild is picked up with no manual step.
 
 ## What's inside (v0.9)
 
@@ -53,7 +53,7 @@ new image: `rm -rf /tmp/$USER/fintech-sbx`.
 | Editor | Neovim (latest) + LazyVim starter |
 | LazyVim extras | `ai.copilot`, `lang.html`, `lang.python`, plus git/json/markdown/yaml/toml |
 | Terminal | tmux (multiplexer), Yazi (file manager) with all recommended deps, lazygit, `ncurses-term` (many terminfos) |
-| AI agents | `claude` (Claude Code) **is** bundled as an in-container fallback, but runs sluggishly under proot (`PROOT_NO_SECCOMP=1` ptraces every syscall) — prefer running it locally on the Mac and driving the node over SSH. The standalone `copilot` CLI is **not** bundled (run locally). Neovim's inline Copilot (LSP via `copilot.lua`/`avante.nvim`) **is** included. |
+| AI agents | `claude` (Claude Code) **is** bundled and runs well in-container under udocker/F3 (much snappier than the old ptrace runtime; F3's LD_PRELOAD path avoids the per-syscall tax). Running it locally on the Mac and driving the node over SSH is still an option. The standalone `copilot` CLI is **not** bundled (run locally). Neovim's inline Copilot (LSP via `copilot.lua`/`avante.nvim`) **is** included. |
 | SSH | `openssh-client` (git/scp); sshd not used |
 | PDF viewer | **bookokrat** at `/usr/local/bin/bookokrat` — terminal PDF/EPUB reader (kitty graphics, renders over SSH; no X11). VimTeX (`<localleader>lv`), yazi, and snacks-explorer route PDFs to it (see "PDF viewing" below). |
 

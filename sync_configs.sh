@@ -70,7 +70,6 @@ CONFIGS_DIR="${SCRIPT_DIR}/configs"
 HAVE_ZSHRC=0;    [ -f "${SCRIPT_DIR}/.zshrc" ]              && HAVE_ZSHRC=1
 HAVE_IGNORE=0;   [ -f "${SCRIPT_DIR}/.ignore" ]             && HAVE_IGNORE=1
 HAVE_TERM=0;     [ -f "${SCRIPT_DIR}/term_session.sh" ]     && HAVE_TERM=1
-HAVE_PROOT=0;    [ -f "${SCRIPT_DIR}/proot_dev.sh" ]        && HAVE_PROOT=1
 HAVE_UDOCKER=0;  [ -f "${SCRIPT_DIR}/udocker_dev.sh" ]      && HAVE_UDOCKER=1
 HAVE_CONNECT=0;  [ -f "${SCRIPT_DIR}/connect_nvim.sh" ]     && HAVE_CONNECT=1
 # bookokrat synctex wrappers → ~/.local/bin (on PATH inside the container).
@@ -87,7 +86,6 @@ echo "  • ~/.config/{$(IFS=,; echo "${CONFIG_LIST[*]}")} → CIRCE"
 [ "$HAVE_ZSHRC"    -eq 1 ] && echo "  • .zshrc → CIRCE ~/"
 [ "$HAVE_IGNORE"   -eq 1 ] && echo "  • .ignore → CIRCE ~/  (fd/ripgrep excludes)"
 [ "$HAVE_TERM"     -eq 1 ] && echo "  • term_session.sh → CIRCE ~/sh/"
-[ "$HAVE_PROOT"    -eq 1 ] && echo "  • proot_dev.sh → CIRCE ~/bin/"
 [ "$HAVE_UDOCKER"  -eq 1 ] && echo "  • udocker_dev.sh → CIRCE ~/bin/  (udocker/F3 launcher)"
 [ "$HAVE_BOOKOKRAT_SCRIPTS" -eq 1 ] && echo "  • bookokrat-{split,forward,inverse} → CIRCE ~/.local/bin/"
 [ "$HAVE_CONNECT"  -eq 1 ] && echo "  • connect_nvim.sh → ~/  (local)"
@@ -161,16 +159,6 @@ if [ "$HAVE_TERM" -eq 1 ]; then
   mkdir -p "$STAGING/sh"
   cp "${SCRIPT_DIR}/term_session.sh" "$STAGING/sh/term_session.sh"
   _staged+=("sh/term_session.sh")
-fi
-
-if [ "$HAVE_PROOT" -eq 1 ]; then
-  mkdir -p "$STAGING/bin"
-  cp "${SCRIPT_DIR}/proot_dev.sh" "$STAGING/bin/proot_dev.sh"
-  # term_session.sh and connect_nvim.sh exec ~/bin/proot_dev.sh and require it to
-  # be executable (term_session.sh hard-fails on a non-exec launcher). The repo
-  # copy isn't +x, so set it here before the perm-preserving rsync -a.
-  chmod +x "$STAGING/bin/proot_dev.sh"
-  _staged+=("bin/proot_dev.sh")
 fi
 
 if [ "$HAVE_UDOCKER" -eq 1 ]; then

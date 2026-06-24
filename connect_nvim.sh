@@ -6,7 +6,7 @@
 #   ./connect_nvim.sh              # auto-find job and connect
 #   ./connect_nvim.sh <node>       # connect directly to a known node
 #
-# Drops into an interactive zsh inside the container (launched via udocker/proot).
+# Drops into an interactive zsh inside the container (launched via udocker).
 # Start tmux/nvim manually from there if you want a persistent layout:
 #   tm   (= tmux new-session -A -s main; attaches if it already exists)
 #
@@ -20,10 +20,9 @@ REMOTE_USER="gson"
 # Target compute node — matches #SBATCH --nodelist in term_session.sh
 TARGET_NODE="mdc-1057-13-13"
 
-# Container launcher to run on the compute node. Default matches term_session.sh
-# (CONTAINER_RUNTIME=udocker); set CONTAINER_LAUNCHER=proot_dev.sh for the proot
-# fallback. Both forward args to zsh, so `-i -c '...'` behaves identically.
-LAUNCHER="${CONTAINER_LAUNCHER:-udocker_dev.sh}"
+# Container launcher to run on the compute node (udocker Fakechroot/F3). It
+# forwards args to zsh, so `-i -c '...'` behaves like a plain interactive shell.
+LAUNCHER="udocker_dev.sh"
 
 # ─── Find compute node ────────────────────────────────────────────────────────
 if [ -n "$1" ]; then
@@ -64,7 +63,7 @@ COLS="${_sz##* }" ROWS="${_sz%% *}"
 [[ -z "$ROWS"  || "$ROWS"  -le 0 ]] 2>/dev/null && ROWS=$(tput lines 2>/dev/null || echo 50)
 unset _sz
 
-# ─── SSH to compute node and launch the container via proot ──────────────────
+# ─── SSH to compute node and launch the container via udocker ────────────────
 # Uses the compute node's native SSH (no container sshd needed).
 # Drops into interactive zsh (`-i`) so /etc/zsh/zshrc is sourced (aliases,
 # starship, zoxide).  /etc/zsh/zshenv (PATH, XDG_*, EDITOR, SHELL) is sourced
@@ -81,8 +80,8 @@ unset _sz
 # SSH (no XQuartz, no -Y forwarding, no mac-open reverse tunnel).
 
 # Singularity/Apptainer can't start containers on compute nodes post-2026, so we
-# launch via ~/bin/$LAUNCHER instead (userspace udocker/proot). It forwards args
-# to zsh, so `-i -c '...'` behaves like the old `singularity exec ... zsh -i -c`.
+# launch via ~/bin/$LAUNCHER instead (userspace udocker, Fakechroot/F3). It
+# forwards args to zsh, so `-i -c '...'` behaves like `singularity exec … zsh -i -c`.
 ssh \
     -J "$LOGIN_ALIAS" \
     -tt \

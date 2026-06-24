@@ -1,18 +1,17 @@
 #!/bin/bash
 # udocker_dev.sh — launch the fintech-tools container via udocker (Fakechroot/F3).
 #
-# Experimental, lower-overhead alternative to proot_dev.sh. CIRCE compute nodes
-# can't run Singularity/Apptainer (/apps nosuid + user namespaces disabled), and
-# proot's ptrace tax dominates our metadata-heavy workload (nvim plugin loads,
-# Claude fsync writes). udocker's Fakechroot engine intercepts libc filesystem
-# calls via LD_PRELOAD instead of ptrace, so per-op overhead is ~4-7x lower —
-# measured inside the container 2026-06-23 on mdc-1057-13-13 (vs proot):
-#   stat  0.005 vs 0.021 ms/op   read 0.007 vs 0.047 ms/op
-#   create 0.017 vs 0.057 ms/op  fsync 0.225 vs 0.303 ms/op
-# => LazyVim cold start ~5.7x faster. All tools ran, incl. Go statics fzf/lazygit.
+# The container runtime for CIRCE. Compute nodes can't run Singularity/Apptainer
+# (/apps nosuid + user namespaces disabled), so we use udocker's Fakechroot (F3)
+# engine: it intercepts libc filesystem calls via LD_PRELOAD (pathname
+# translation, no ptrace), which is ~4-7x lower per-op overhead than the ptrace
+# tax that dominated our metadata-heavy workload (nvim plugin loads, Claude fsync).
+# Measured inside the container 2026-06-23 on mdc-1057-13-13:
+#   stat 0.005   read 0.007   create 0.017   fsync 0.225 ms/op
+# => LazyVim cold start ~5.7x faster. All tools work, incl. Go statics fzf/lazygit.
 #
-# No rebuild: imports the SAME flat rootfs tar proot uses. Args forward to zsh
-# (e.g. `udocker_dev.sh -i -c '...'`). proot_dev.sh stays as the stable fallback.
+# Imports the flat rootfs tar from build_container.sh. Args forward to zsh
+# (e.g. `udocker_dev.sh -i -c '...'`).
 #
 # Storage split (each item where its nature wants it):
 #   /home  (persistent, backed-up; touched only at setup/launch, not at runtime):
@@ -30,15 +29,8 @@ UDOCKER_IMAGE="${UDOCKER_IMAGE:-fintech:latest}"
 UDOCKER_CONTAINER="${UDOCKER_CONTAINER:-ft}"
 PY_MODULE="${PY_MODULE:-apps/miniconda/4.7.12}"
 
-# rootfs tar: prefer the persistent home copy, fall back to the legacy /work copy
-# (build_container.sh currently ships to /work; it can move to ~/proot-sb later).
-FINTECH_TAR="${FINTECH_TAR:-}"
-if [ -z "$FINTECH_TAR" ]; then
-    for _t in "$HOME/proot-sb/fintech-rootfs.tar" "/work/g/$USER/proot-sb/fintech-rootfs.tar"; do
-        [ -f "$_t" ] && { FINTECH_TAR="$_t"; break; }
-    done
-    FINTECH_TAR="${FINTECH_TAR:-/work/g/$USER/proot-sb/fintech-rootfs.tar}"
-fi
+# rootfs tar on the persistent home (build_container.sh ships it to ~/fintech-sb).
+FINTECH_TAR="${FINTECH_TAR:-$HOME/fintech-sb/fintech-rootfs.tar}"
 
 # ── python3 for the host-side udocker tool (the RHEL7 host has none) ──────────
 # udocker is pure Python (>=3.6); the *running* container does NOT need it. Source
@@ -78,17 +70,16 @@ fi
 mkdir -p "$UDOCKER_DIR" || exit 1
 
 # ── per-node setup: install tools + import + create + F3 (gated + flock) ──────
-# /tmp is wiped per allocation, so the container is rebuilt per node — like proot's
-# extraction but heavier (import-copy + extract + patchelf). Gated on a marker
-# written only after F3 completes; flock serializes a batch pre-warm against an
-# eager connect. F3 patchelf's the binaries to absolute container paths, so it must
-# be redone per node (udocker F-mode containers aren't portable across hosts).
+# /tmp is wiped per allocation, so the container is rebuilt per node (import-copy
+# + extract + patchelf). Gated on a marker written only after F3 completes; flock
+# serializes a batch pre-warm against an eager connect. F3 patchelf's the binaries
+# to absolute container paths, so it must be redone per node (udocker F-mode
+# containers aren't portable across hosts).
 F3_READY="$UDOCKER_DIR/.f3-ready"
 # Re-run setup when the marker is missing OR the rootfs tar is newer than it: a
-# rebuilt image must replace this node's container (same stale-sandbox lesson as
-# proot — a new tar on /work or $HOME wouldn't otherwise be picked up until /tmp
-# is wiped). The setup below rm's any existing container/image first, so this is
-# also the auto-update path after build_container.sh ships a new tar.
+# rebuilt image must replace this node's container, else a new tar wouldn't be
+# picked up until /tmp is wiped. The setup below rm's any existing container/image
+# first, so this is also the auto-update path after build_container.sh ships a new tar.
 _need_setup() { [ ! -e "$F3_READY" ] || [ "$FINTECH_TAR" -nt "$F3_READY" ]; }
 if _need_setup; then
     [ -f "$FINTECH_TAR" ] || { err "rootfs tarball not found at $FINTECH_TAR"; exit 1; }
@@ -121,7 +112,7 @@ if [ -n "$_root" ] && [ -f "$_root/opt/fakechroot/lib/libfakechroot.so" ]; then
     export UDOCKER_FAKECHROOT_SO="$_root/opt/fakechroot/lib/libfakechroot.so"
 fi
 
-# ── Claude Code config dir → node-local /tmp (ported verbatim from proot_dev.sh)
+# ── Claude Code config dir → node-local /tmp ─────────────────────────────────
 # ~/.claude is fsync/write-heavy and the network home is slow; relocate the whole
 # tree to fast local disk, seed from $HOME on first use per node, and sync the
 # persistent bits (auth + history) back on exit. Passed into the container via
@@ -151,7 +142,7 @@ _claude_sync_back() {
 }
 trap _claude_sync_back EXIT
 
-# ── volumes (proot binds -> udocker -v). udocker provides /proc /dev /sys itself,
+# ── volumes (host dirs -> udocker -v). udocker provides /proc /dev /sys itself,
 # so those drop out; we bind the data dirs + /tmp (carries the nvim->/tmp and
 # Claude->/tmp redirects) + the network/time /etc files. --hostauth (below) maps
 # the host user, so /etc/passwd,group are handled there.

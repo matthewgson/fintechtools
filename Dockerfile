@@ -124,8 +124,8 @@ RUN apt-get update && \
     rsync \
     # tmux: terminal multiplexer (persistent panes/sessions across reconnects).
     # Chosen over zellij here because a fresh zellij session is multi-second slow
-    # under proot — its WASM plugin runtime + async plugin handshake fire a huge
-    # number of syscalls at *create*, and PROOT_NO_SECCOMP=1 ptraces every one.
+    # in the container — its WASM plugin runtime + async plugin handshake fire a
+    # huge number of syscalls at *create*, which the userspace runtime intercepts.
     # tmux is a lean C server with a built-in status line (no interpreter, no
     # plugin protocol), so a fresh session creates in ~0.03s on the same node.
     tmux \
@@ -450,10 +450,10 @@ RUN mkdir -p -m 755 /etc/apt/keyrings && \
 
 # ─── Stage 11: claude-code CLI + Neovim Copilot LSP + tree-sitter ────────────
 # @anthropic-ai/claude-code       : Anthropic Claude terminal coding agent. Kept
-#     as a just-in-case in-container fallback. Heads-up: it feels sluggish under
-#     proot — PROOT_NO_SECCOMP=1 ptraces every syscall and an interactive agent
-#     is far more syscall-heavy than the editor — so prefer running `claude`
-#     locally on the Mac and driving this box over SSH when you can.
+#     as an in-container option; under udocker's Fakechroot/F3 it's far more
+#     responsive than under the old ptrace runtime (Claude is syscall-heavy, which
+#     F3's LD_PRELOAD path avoids). Running `claude` on the Mac and driving this
+#     box over SSH is still an option.
 # @github/copilot-language-server : GitHub Copilot LSP backend for Neovim
 #     Copilot plugins (copilot.lua, avante.nvim) — inline completions + chat.
 # tree-sitter-cli                 : required by nvim-treesitter to compile parsers.
@@ -549,9 +549,9 @@ mkdir -p "${XDG_CACHE_HOME}/nvim" 2>/dev/null
 # ── tmux server state on fast /tmp ───────────────────────────────────────────
 # tmux keeps its socket under $TMUX_TMPDIR (default /tmp), which is node-local
 # ext3 — already fast, nothing to redirect.  A fresh tmux session creates in
-# ~0.03s even under proot's PROOT_NO_SECCOMP=1 ptrace, because tmux is a lean C
-# server with a built-in status line: no WASM interpreter and no plugin
-# handshake firing thousands of traced syscalls at create.  For persistence
+# ~0.03s even in the container, because tmux is a lean C server with a built-in
+# status line: no WASM interpreter and no plugin handshake firing thousands of
+# intercepted syscalls at create.  For persistence
 # across reconnects, attach to a named session (`tm` helper in .zshrc =
 # tmux new-session -A -s main) rather than re-creating.
 

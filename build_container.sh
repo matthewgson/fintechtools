@@ -16,7 +16,7 @@ REMOTE_HOST="circe.rc.usf.edu"
 # /work, purged at 6 months); the tar is read only once per node at unpack, so
 # its slightly slower bulk read off the home FS doesn't affect runtime. Both
 # launchers prefer this home path and fall back to the old /work location.
-REMOTE_ROOTFS_DIR="/home/g/${REMOTE_USER}/proot-sb"
+REMOTE_ROOTFS_DIR="/home/g/${REMOTE_USER}/fintech-sb"
 REMOTE_ROOTFS_PATH="${REMOTE_ROOTFS_DIR}/fintech-rootfs.tar"
 # Repo dir — so the build can chain ./sync_configs.sh at the end (one-shot deploy).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -443,10 +443,9 @@ execute_all_transfers() {
     _te=$(date +%s); _tt=$((_te - _ts))
     print_success "✓ Rootfs tar transferred to CIRCE in ${_tt}s"
     send_pushover_notification "✅ Transfer Complete" "Rootfs tar transferred to CIRCE in ${_tt}s."
-    print_status "On a fresh node the container is unpacked automatically. Both launchers"
-    print_status "now auto-refresh when this tar is newer than the unpacked copy (no manual"
-    print_status "step). To force it on a busy node: rm -rf /tmp/\$USER/.udocker (udocker) or"
-    print_status "/tmp/\$USER/fintech-sbx (proot)."
+    print_status "On a fresh node the container is unpacked automatically; the launcher"
+    print_status "auto-refreshes when this tar is newer than the unpacked copy (no manual"
+    print_status "step). To force it on a busy node: rm -rf /tmp/\$USER/.udocker"
     # Offer to remove the local tar — it's large (~10 GB) and no longer needed
     # after a successful transfer. The next build overwrites it anyway.
     local _tar_size
