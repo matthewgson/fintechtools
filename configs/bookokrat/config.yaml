@@ -80,4 +80,4 @@ book_sort_order: by_name
 nav_panel_width: null
 lookup_command: null
 lookup_display: popup
-synctex_editor: "bookokrat-inverse {file} {line}"
+synctex_editor: 'bookokrat-inverse "{file}" {line}'
