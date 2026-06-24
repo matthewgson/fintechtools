@@ -244,7 +244,11 @@ RUN QUARTO_VERSION=${QUARTO_VERSION} && \
         -o /tmp/quarto.tar.gz && \
     mkdir -p /opt/quarto && \
     tar -C /opt/quarto --strip-components=1 -xzf /tmp/quarto.tar.gz && \
-    ln -sf /opt/quarto/bin/quarto /usr/local/bin/quarto && \
+    # NOT a symlink: quarto's launcher resolves its install root from the script
+    # path and gets it wrong via a symlink (looks for tools/deno + version under
+    # /usr/local/…). A wrapper exec's the real binary so it finds /opt/quarto.
+    printf '#!/bin/sh\nexec /opt/quarto/bin/quarto "$@"\n' > /usr/local/bin/quarto && \
+    chmod +x /usr/local/bin/quarto && \
     rm /tmp/quarto.tar.gz && \
     /usr/local/bin/quarto --version
 
