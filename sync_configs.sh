@@ -74,10 +74,12 @@ HAVE_PROOT=0;    [ -f "${SCRIPT_DIR}/proot_dev.sh" ]        && HAVE_PROOT=1
 HAVE_UDOCKER=0;  [ -f "${SCRIPT_DIR}/udocker_dev.sh" ]      && HAVE_UDOCKER=1
 HAVE_CONNECT=0;  [ -f "${SCRIPT_DIR}/connect_nvim.sh" ]     && HAVE_CONNECT=1
 # bookokrat synctex wrappers → ~/.local/bin (on PATH inside the container).
+# Source the LIVE copies from ~/.local/bin (where they're edited and used) so
+# changes sync without a manual repo update; fall back to the repo-root snapshot.
 BOOKOKRAT_SCRIPTS=(bookokrat-split bookokrat-forward bookokrat-inverse)
 HAVE_BOOKOKRAT_SCRIPTS=1
 for _s in "${BOOKOKRAT_SCRIPTS[@]}"; do
-  [ -f "${SCRIPT_DIR}/${_s}" ] || HAVE_BOOKOKRAT_SCRIPTS=0
+  [ -f "$HOME/.local/bin/${_s}" ] || [ -f "${SCRIPT_DIR}/${_s}" ] || HAVE_BOOKOKRAT_SCRIPTS=0
 done
 
 print_status "Will deploy:"
@@ -182,7 +184,8 @@ fi
 if [ "$HAVE_BOOKOKRAT_SCRIPTS" -eq 1 ]; then
   mkdir -p "$STAGING/.local/bin"
   for _s in "${BOOKOKRAT_SCRIPTS[@]}"; do
-    cp "${SCRIPT_DIR}/${_s}" "$STAGING/.local/bin/${_s}"
+    _src="$HOME/.local/bin/${_s}"; [ -f "$_src" ] || _src="${SCRIPT_DIR}/${_s}"  # prefer live
+    cp "$_src" "$STAGING/.local/bin/${_s}"
     chmod +x "$STAGING/.local/bin/${_s}"
     _staged+=(".local/bin/${_s}")
   done

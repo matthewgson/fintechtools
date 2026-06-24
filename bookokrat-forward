@@ -5,8 +5,6 @@
 # bookokrat's --synctex-forward only talks to an ALREADY-running instance over a
 # Unix socket. So: try to forward; if no instance is open for this PDF, open it
 # in a tmux split, then retry until the socket comes up.
-#
-# Synced to CIRCE ~/.local/bin/ by sync_configs.sh.
 set -euo pipefail
 
 line=$1 col=$2 tex=$3 pdf=$4

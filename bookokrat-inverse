@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 # vimtex inverse search (PDF -> source) for bookokrat.
 # Invoked by bookokrat (synctex_editor) as: bookokrat-inverse <file> <line>
-#
-# Synced to CIRCE ~/.local/bin/ by sync_configs.sh.
 set -euo pipefail
 
 file=$1 line=$2
 
 if [[ -n "${NVIM:-}" ]]; then
     # Jump in the exact Neovim instance that launched bookokrat.
-    exec nvim --server "$NVIM" --remote-send \
-        "<C-\\><C-n>:e ${file}<CR>:${line}<CR>zz"
+    # Open via --remote-silent (the path is a single argv element, so spaces
+    # and ex-metacharacters like % # | in the path are safe — unlike ':e
+    # <path>', which re-parses the command line). Then jump to the line and
+    # center. Two calls run in order: the file is loaded before we position.
+    nvim --server "$NVIM" --remote-send "<C-\\><C-n>" 2>/dev/null || true
+    nvim --server "$NVIM" --remote-silent "$file"
+    exec nvim --server "$NVIM" --remote-send ":${line}<CR>zz"
 elif [[ -n "${TMUX:-}" ]]; then
     # No launching editor known — open the source in a new tmux split.
     exec tmux split-window -h "nvim +${line} $(printf '%q' "$file")"

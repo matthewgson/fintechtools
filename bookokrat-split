@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 # Open a PDF/EPUB in bookokrat (terminal reader).
 # Inside tmux: launch in a new split pane. Otherwise: run in the current terminal.
-#
-# Synced to CIRCE ~/.local/bin/ by sync_configs.sh (on PATH inside the container,
-# which binds $HOME 1:1). The bookokrat binary itself ships in the image
-# (/usr/local/bin/bookokrat, Dockerfile Stage 5f).
 set -euo pipefail
 
 file=${1:?usage: bookokrat-split <file>}
