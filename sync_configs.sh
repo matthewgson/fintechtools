@@ -64,7 +64,7 @@ echo "========================================="
 echo
 
 # ── Discover what exists ──────────────────────────────────────────────────────
-CONFIG_LIST=(avante.nvim github-copilot btm nvim yazi tmux bookokrat)
+CONFIG_LIST=(avante.nvim github-copilot btm nvim yazi tmux bookokrat starship)
 CONFIGS_DIR="${SCRIPT_DIR}/configs"
 
 HAVE_ZSHRC=0;    [ -f "${SCRIPT_DIR}/.zshrc" ]              && HAVE_ZSHRC=1

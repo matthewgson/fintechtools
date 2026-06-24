@@ -164,11 +164,16 @@ for _f in /etc/resolv.conf /etc/hosts /etc/localtime; do
     [ -e "$_f" ] && VOLS+=( -v "$_f:$_f" )
 done
 
-# SLURM client passthrough (best-effort): host squeue/sacct + their RHEL-7 libs
-# into /opt/host-slurm so jobs can be managed from inside the Ubuntu container.
-# F3 file-binds need the targets to pre-exist in the ROOT; create them first.
-# Toggle off with UDOCKER_SLURM_PASSTHROUGH=0 if it misbehaves under fakechroot.
-if [ "${UDOCKER_SLURM_PASSTHROUGH:-1}" = "1" ] && [ -n "$_root" ]; then
+# SLURM client passthrough — DISABLED by default under udocker/F3. The host
+# squeue/sacct are glibc-2.17 (RHEL7) binaries and won't run under fakechroot's
+# glibc-2.39 environment: the host loader/libs aren't reachable through F3's
+# path-remap binds, and patchelf'ing them still resolves the container's libc
+# (verified 2026-06-24, multiple approaches). ssh-to-host is also blocked by the
+# F3 getpwuid/NSS gap ("No user exists for uid"). For SLURM from inside a session,
+# run it from a host shell (ssh -J circe <node>) or use CONTAINER_RUNTIME=proot
+# (proot's real path translation makes the passthrough work). Set
+# UDOCKER_SLURM_PASSTHROUGH=1 to bind them anyway (they will not execute).
+if [ "${UDOCKER_SLURM_PASSTHROUGH:-0}" = "1" ] && [ -n "$_root" ]; then
     mkdir -p "$_root/opt/host-slurm/bin" "$_root/opt/host-slurm/lib" 2>/dev/null
     for _hp in /etc/slurm /etc/slurm-llnl /run/munge /var/run/munge /var/spool/slurm; do
         [ -d "$_hp" ] && VOLS+=( -v "$_hp:$_hp" )
