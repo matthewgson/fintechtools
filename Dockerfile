@@ -413,6 +413,37 @@ RUN CATPPUCCIN_TMUX_VERSION=${CATPPUCCIN_TMUX_VERSION} && \
 # Terminal multiplexer (tmux) is installed from apt in Stage 1 — see the note
 # there for why tmux replaced zellij in this image.
 
+# ─── Stage 8g: glibc-matched libfakechroot for udocker (Fakechroot/F3) ───────
+# When this image is launched via udocker's F3 engine (the lower-overhead, non-
+# ptrace alternative to proot — see udocker_dev.sh), udocker LD_PRELOADs a
+# libfakechroot.so to do its path translation. Its *bundled* libs don't match
+# this image's glibc (Ubuntu 24.04 / 2.39), so F3 warns "OS might not be
+# supported" and, more visibly, glibc NSS getpwuid() can't resolve our uid →
+# `id`/`whoami`/the shell prompt show a bare number. Building udocker's own
+# fakechroot fork against THIS image's glibc fixes both. udocker_dev.sh auto-
+# detects the result at /opt/fakechroot/lib/libfakechroot.so (UDOCKER_FAKECHROOT_SO)
+# and silently skips it when absent.
+#
+# Best-effort and non-fatal: a build failure only logs a warning and leaves the
+# image otherwise complete (F3 then keeps the bundled lib — same as before, no
+# regression). Irrelevant to the proot runtime, which doesn't use fakechroot.
+RUN set -e; \
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential autoconf automake libtool pkg-config git ca-certificates; \
+    ( set -e; \
+      git clone --depth 1 https://github.com/jorge-lip/libfakechroot-glibc-udocker /tmp/lfc; \
+      cd /tmp/lfc; \
+      ( ./autogen.sh || autoreconf -fi ); \
+      ./configure; \
+      make -j"$(nproc)"; \
+      mkdir -p /opt/fakechroot/lib; \
+      cp -a src/.libs/libfakechroot.so* /opt/fakechroot/lib/; \
+      [ -e /opt/fakechroot/lib/libfakechroot.so ] || \
+        ln -sf "$(cd /opt/fakechroot/lib && ls libfakechroot.so.* | head -1)" /opt/fakechroot/lib/libfakechroot.so; \
+      echo "libfakechroot built:"; ls -l /opt/fakechroot/lib/ ) \
+    || echo "WARNING: libfakechroot build failed — udocker F3 keeps its bundled lib (uid resolution stays cosmetic)"; \
+    rm -rf /tmp/lfc /var/lib/apt/lists/*
+
 # ─── Stage 10: GitHub CLI ────────────────────────────────────────────────────
 RUN mkdir -p -m 755 /etc/apt/keyrings && \
     wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg \
