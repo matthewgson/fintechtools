@@ -28,7 +28,13 @@ case "$CONTAINER_RUNTIME" in
   udocker) LAUNCHER="$HOME/bin/udocker_dev.sh" ;;
   proot|*) LAUNCHER="$HOME/bin/proot_dev.sh"; CONTAINER_RUNTIME=proot ;;
 esac
-ROOTFS_TAR="/work/g/$USER/proot-sb/fintech-rootfs.tar"
+# rootfs tar: prefer the persistent home copy, fall back to the legacy /work copy
+# (this is just a pre-flight existence check; the launcher resolves its own path).
+ROOTFS_TAR=""
+for _t in "$HOME/proot-sb/fintech-rootfs.tar" "/work/g/$USER/proot-sb/fintech-rootfs.tar"; do
+  [ -f "$_t" ] && { ROOTFS_TAR="$_t"; break; }
+done
+ROOTFS_TAR="${ROOTFS_TAR:-$HOME/proot-sb/fintech-rootfs.tar}"
 echo "Container runtime: $CONTAINER_RUNTIME (userspace; no setuid, no user namespaces)"
 if [ ! -x "$LAUNCHER" ] || [ ! -f "$ROOTFS_TAR" ]; then
   echo "❌ ERROR: missing launcher ($LAUNCHER) or rootfs tar ($ROOTFS_TAR)."
