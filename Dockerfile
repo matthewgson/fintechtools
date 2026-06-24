@@ -122,13 +122,8 @@ RUN apt-get update && \
     pandoc \
     git \
     rsync \
-    # tmux: terminal multiplexer (persistent panes/sessions across reconnects).
-    # Chosen over zellij here because a fresh zellij session is multi-second slow
-    # in the container — its WASM plugin runtime + async plugin handshake fire a
-    # huge number of syscalls at *create*, which the userspace runtime intercepts.
-    # tmux is a lean C server with a built-in status line (no interpreter, no
-    # plugin protocol), so a fresh session creates in ~0.03s on the same node.
-    tmux \
+    # (tmux is NOT installed from apt — built from source in Stage 8g below,
+    #  because 24.04 pins tmux 3.4 which is too old for ghostty's CSI-u keys.)
     nano \
     vim \
     wget \
@@ -414,8 +409,27 @@ RUN CATPPUCCIN_TMUX_VERSION=${CATPPUCCIN_TMUX_VERSION} && \
     rm /tmp/catppuccin-tmux.tar.gz && \
     { [ -f /usr/local/share/tmux-plugins/catppuccin/catppuccin.tmux ] || { echo "ERROR: catppuccin.tmux missing after extract" >&2; exit 1; }; }
 
-# Terminal multiplexer (tmux) is installed from apt in Stage 1 — see the note
-# there for why tmux replaced zellij in this image.
+# ─── Stage 8g: tmux built from source (newer than Ubuntu 24.04's apt 3.4) ────
+# Ubuntu 24.04 pins tmux 3.4, which predates modern terminals' CSI-u extended-key
+# negotiation. Over SSH from ghostty that breaks Ctrl+Space (legacy encoding = a
+# NUL byte the PTY drops) and Ctrl+h/j/k/l (vim-tmux-navigator) — they work on the
+# Mac (tmux 3.6b) but failed in the container. Building 3.6b here matches the Mac
+# exactly and fixes it natively; configs/tmux/tmux.conf's `extended-keys` then just
+# reinforces it. tmux is still preferred over zellij regardless: a lean C server,
+# ~0.03s fresh-session create, no WASM plugin runtime to tax the container runtime.
+# build-essential is already present (Stage 1); add only the tmux-specific deps
+# (left in place — purging the -dev pkgs would also drop tmux's runtime libevent).
+ARG TMUX_VERSION=3.6b
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libevent-dev libncurses-dev bison pkg-config && \
+    curl -fL "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz" \
+        -o /tmp/tmux.tar.gz && \
+    tar -xzf /tmp/tmux.tar.gz -C /tmp && \
+    cd "/tmp/tmux-${TMUX_VERSION}" && \
+    ./configure --prefix=/usr/local && make -j"$(nproc)" && make install && \
+    cd / && rm -rf /tmp/tmux* && \
+    rm -rf /var/lib/apt/lists/* && \
+    tmux -V && [ "$(command -v tmux)" = "/usr/local/bin/tmux" ]
 
 # NOTE: no glibc-matched libfakechroot is baked in for udocker's F3 mode. Under
 # F3, glibc NSS getpwuid() can't resolve our uid, so id/whoami show a bare number
