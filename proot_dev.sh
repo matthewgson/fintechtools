@@ -170,39 +170,8 @@ for _d in "/work/g/$USER" "/work_bgfs/g/$USER" /shares; do
     [ -d "$_d" ] && BINDS+=(-b "$_d:$_d")
 done
 
-# SLURM client passthrough: host squeue/sacct + their RHEL-7 libs into
-# /opt/host-slurm (image wrappers exec them with a scoped LD_LIBRARY_PATH).
-# Best-effort — skipped when SLURM isn't on the node.
-for _hp in /etc/slurm /etc/slurm-llnl /run/munge /var/run/munge /var/spool/slurm; do
-    [ -d "$_hp" ] && BINDS+=(-b "$_hp:$_hp")
-done
-for _hp in /usr/lib64/slurm /usr/lib/slurm; do
-    [ -d "$_hp" ] && { BINDS+=(-b "$_hp:$_hp"); break; }
-done
-_found_bins=()
-_slurm_bin_dirs=(/usr/bin /usr/local/bin /opt/slurm/bin /opt/slurm-llnl/bin)
-for _cmd in squeue sacct sbatch srun sinfo scancel scontrol salloc \
-            sstat sprio sshare sreport sacctmgr sbcast sdiag sattach \
-            sgather sview sjstat; do
-    _bin=$(command -v "$_cmd" 2>/dev/null) || true
-    if [ -z "$_bin" ]; then
-        for _dir in "${_slurm_bin_dirs[@]}"; do
-            [ -x "$_dir/$_cmd" ] && _bin="$_dir/$_cmd" && break
-        done
-    fi
-    [ -n "$_bin" ] && [ -x "$_bin" ] || continue
-    BINDS+=(-b "$_bin:/opt/host-slurm/bin/$_cmd")
-    _found_bins+=("$_bin")
-done
-declare -A _seen
-for _entry in "${_found_bins[@]}"; do
-    while IFS= read -r _lib; do
-        [ -f "$_lib" ] && [ -z "${_seen[$_lib]:-}" ] || continue
-        _seen[$_lib]=1
-        BINDS+=(-b "$_lib:/opt/host-slurm/lib/${_lib##*/}")
-    done < <(ldd "$_entry" 2>/dev/null | awk '/=> \//{print $3}' |
-        grep -E 'lib(slurm|munge|hwloc|numa|lua|pmi|pmix|json-c|yaml|jwt|jansson|hdf5|cgroup|systemd|cap)')
-done
+# (SLURM client passthrough removed 2026-06-24 — run squeue/sacct on the CIRCE
+#  login node, not inside the container. The image no longer ships the wrappers.)
 
 # Launch: -r = bare guest rootfs (host binds applied explicitly above — see the
 # /proc/self/exe note); -w = start in the real $HOME. Default to interactive

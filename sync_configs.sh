@@ -122,6 +122,7 @@ for cfg in "${CONFIG_LIST[@]}"; do
     yazi) _is_replace=1 ;;
     tmux) _is_replace=1 ;;   # repo owns the container tmux.conf (no Mac copy)
     bookokrat) _is_replace=1 ;;   # repo owns the container bookokrat config
+    starship) _is_replace=1 ;;   # repo owns the container prompt (warm SSH theme; Mac keeps its own)
     nvim) _is_overlay=1 ;;
   esac
 

@@ -21,8 +21,7 @@
 #            $UDOCKER_DIR = container ROOT + tools; nvim plugin data; Claude config
 #
 # Env overrides: FINTECH_TAR, UDK_BASE ($HOME/udk), UDOCKER_DIR (node /tmp),
-#   UDOCKER_IMAGE (fintech:latest), UDOCKER_CONTAINER (ft), PY_MODULE,
-#   UDOCKER_SLURM_PASSTHROUGH (1).
+#   UDOCKER_IMAGE (fintech:latest), UDOCKER_CONTAINER (ft), PY_MODULE.
 set -uo pipefail
 
 err() { echo "udocker_dev: $*" >&2; }
@@ -164,39 +163,9 @@ for _f in /etc/resolv.conf /etc/hosts /etc/localtime; do
     [ -e "$_f" ] && VOLS+=( -v "$_f:$_f" )
 done
 
-# SLURM client passthrough — DISABLED by default under udocker/F3. The host
-# squeue/sacct are glibc-2.17 (RHEL7) binaries and won't run under fakechroot's
-# glibc-2.39 environment: the host loader/libs aren't reachable through F3's
-# path-remap binds, and patchelf'ing them still resolves the container's libc
-# (verified 2026-06-24, multiple approaches). ssh-to-host is also blocked by the
-# F3 getpwuid/NSS gap ("No user exists for uid"). For SLURM from inside a session,
-# run it from a host shell (ssh -J circe <node>) or use CONTAINER_RUNTIME=proot
-# (proot's real path translation makes the passthrough work). Set
-# UDOCKER_SLURM_PASSTHROUGH=1 to bind them anyway (they will not execute).
-if [ "${UDOCKER_SLURM_PASSTHROUGH:-0}" = "1" ] && [ -n "$_root" ]; then
-    mkdir -p "$_root/opt/host-slurm/bin" "$_root/opt/host-slurm/lib" 2>/dev/null
-    for _hp in /etc/slurm /etc/slurm-llnl /run/munge /var/run/munge /var/spool/slurm; do
-        [ -d "$_hp" ] && VOLS+=( -v "$_hp:$_hp" )
-    done
-    _found_bins=()
-    for _cmd in squeue sacct sbatch srun sinfo scancel scontrol salloc sstat sprio sshare sacctmgr; do
-        _bin=$(command -v "$_cmd" 2>/dev/null) || true
-        [ -n "$_bin" ] && [ -x "$_bin" ] || continue
-        VOLS+=( -v "$_bin:/opt/host-slurm/bin/$_cmd" )
-        _found_bins+=("$_bin")
-    done
-    if [ "${#_found_bins[@]}" -gt 0 ]; then
-        declare -A _seen
-        for _entry in "${_found_bins[@]}"; do
-            while IFS= read -r _lib; do
-                [ -f "$_lib" ] && [ -z "${_seen[$_lib]:-}" ] || continue
-                _seen[$_lib]=1
-                VOLS+=( -v "$_lib:/opt/host-slurm/lib/${_lib##*/}" )
-            done < <(ldd "$_entry" 2>/dev/null | awk '/=> \//{print $3}' |
-                grep -E 'lib(slurm|munge|hwloc|numa|lua|pmi|pmix|json-c|yaml|jwt|jansson|hdf5|cgroup|systemd|cap)')
-        done
-    fi
-fi
+# (SLURM client passthrough removed — host RHEL7 squeue/sacct can't run under F3's
+#  glibc 2.39, and ssh-to-host is blocked by the getpwuid gap. Run SLURM commands
+#  on the CIRCE login node, or a host shell: ssh -J circe <node>.)
 
 # Runtime env: real HOME (image default is /home/gson — would break tools that
 # write to ~, e.g. starship's cache), zsh as SHELL, the Claude redirect, and the

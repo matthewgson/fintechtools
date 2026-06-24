@@ -435,48 +435,14 @@ RUN mkdir -p -m 755 /etc/apt/keyrings && \
     rm -rf /var/lib/apt/lists/*
 
 
-# ─── Stage 10c: SLURM client passthrough (host-binary binding) ──────────────
-# The HPC cluster runs RHEL 7 with an old SLURM whose RPC protocol is not
-# compatible with anything we could install via apt.  Instead, the launcher
-# scripts (term_session.sh / dev_session.sh) bind-mount the host's SLURM
-# binaries and their direct library deps into the locations created below.
-#
-# Layout at runtime:
-#   /opt/host-slurm/bin/{squeue,sacct,…}  ← host /usr/bin/<cmd>
-#   /opt/host-slurm/lib/<basename>.so     ← host libslurm*, libmunge*, plugins' deps
-#   /usr/lib64/slurm/                     ← host plugin dir (path is absolute
-#                                            in slurm.conf, so we mirror it)
-#   /etc/slurm[-llnl]/slurm.conf          ← cluster config
-#   /run/munge, /var/run/munge            ← munge auth socket
-#
-# Wrappers in /usr/local/bin/<cmd> exec the bound host binary with a SCOPED
-# LD_LIBRARY_PATH so RHEL 7 libs (libslurm, libmunge) are used ONLY for
-# these commands, never leaking to the rest of the container's newer glibc.
-# The host binary's hard-coded PT_INTERP (/lib64/ld-linux-x86-64.so.2) is
-# resolved against the container's Ubuntu ld.so + libc, which is
-# forward-compatible with RHEL 7 binaries.
-RUN mkdir -p /opt/host-slurm/bin /opt/host-slurm/lib \
-             /usr/lib64/slurm \
-             /etc/slurm /etc/slurm-llnl \
-             /run/munge /var/run/munge /var/spool/slurm && \
-    useradd -r -M -s /sbin/nologin slurm 2>/dev/null || true && \
-    for cmd in squeue sacct sbatch srun sinfo scancel scontrol salloc \
-               sstat sprio sshare sreport sacctmgr sbcast sdiag sattach \
-               sgather sview sjstat; do \
-        printf '%s\n' \
-            '#!/bin/sh' \
-            '# Auto-generated wrapper: exec host SLURM binary with scoped LD_LIBRARY_PATH.' \
-            'cmd="${0##*/}"' \
-            'if [ ! -x "/opt/host-slurm/bin/${cmd}" ]; then' \
-            '    echo "${cmd}: host SLURM binary not bound at /opt/host-slurm/bin/${cmd}." >&2' \
-            '    echo "Did the launcher script run on a node with SLURM installed?" >&2' \
-            '    exit 127' \
-            'fi' \
-            'export LD_LIBRARY_PATH="/opt/host-slurm/lib:/usr/lib64/slurm:${LD_LIBRARY_PATH}"' \
-            'exec "/opt/host-slurm/bin/${cmd}" "$@"' \
-            > "/usr/local/bin/${cmd}" && \
-        chmod +x "/usr/local/bin/${cmd}"; \
-    done
+# ─── (removed) SLURM client passthrough ─────────────────────────────────────
+# The host RHEL7 SLURM clients (squeue/sacct/sinfo/…) cannot run in this
+# container under udocker's Fakechroot/F3: their glibc-2.17 runtime isn't
+# reachable (bind / explicit-loader / copy+patchelf all resolve the container's
+# glibc 2.39 → relocation error), and ssh-to-host is blocked by F3's getpwuid
+# gap. So the auto-generated /usr/local/bin/<cmd> wrappers + /opt/host-slurm
+# machinery were removed (2026-06-24). Run SLURM commands on the CIRCE login
+# node, or a host shell (ssh -J circe <node>) — not inside the container.
 
 # ─── Stage 11: claude-code CLI + Neovim Copilot LSP + tree-sitter ────────────
 # @anthropic-ai/claude-code       : Anthropic Claude terminal coding agent. Kept
@@ -627,18 +593,8 @@ export COLORTERM=truecolor
 : "${TERM:=xterm-256color}"
 export TERM
 
-# ── SLURM client config discovery ────────────────────────────────────────────
-# squeue/sacct/sbatch read $SLURM_CONF first.  Host clusters may put the
-# config at /etc/slurm/slurm.conf (modern) or /etc/slurm-llnl/slurm.conf
-# (older Debian/Ubuntu).  Both mount points are pre-created in the image
-# and bind-mounted (when present on the host) by the launcher scripts.
-if [ -z "${SLURM_CONF:-}" ]; then
-    if [ -f /etc/slurm/slurm.conf ]; then
-        export SLURM_CONF=/etc/slurm/slurm.conf
-    elif [ -f /etc/slurm-llnl/slurm.conf ]; then
-        export SLURM_CONF=/etc/slurm-llnl/slurm.conf
-    fi
-fi
+# (SLURM client config discovery removed with the SLURM passthrough — run SLURM
+#  commands on the CIRCE login node, not inside the container.)
 
 EOF
 RUN cat >> /etc/zsh/zshrc << 'EOF'

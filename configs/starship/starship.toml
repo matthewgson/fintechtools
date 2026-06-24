@@ -1,0 +1,83 @@
+"$schema" = 'https://starship.rs/config-schema.json'
+
+# ── CIRCE / SSH container prompt ──────────────────────────────────────────────
+# Deliberately WARM-toned (amber/orange) — the Mac prompt is cool blue and leads
+# with an Apple logo, so a single glance at the colour + the "ssh" badge + the
+# node hostname tells you you're on a remote CIRCE node, not local.
+# Repo-owned: sync_configs.sh deploys configs/starship → CIRCE ~/.config/starship
+# (REPLACE policy), so the Mac keeps its own ~/.config/starship.
+
+format = """
+[░▒▓](#d79921)\
+[  ssh ](bg:#d79921 fg:#1d2021 bold)\
+[](fg:#d79921 bg:#504945)\
+$hostname\
+[](fg:#504945 bg:#d65d0e)\
+$directory\
+[](fg:#d65d0e bg:#3c3836)\
+$git_branch\
+$git_status\
+[](fg:#3c3836 bg:#282828)\
+$nodejs$python$rust$golang\
+[](fg:#282828 bg:#1d2021)\
+$time\
+[ ](fg:#1d2021)\
+\n$character"""
+
+[hostname]
+ssh_only = false
+trim_at = "."
+style = "bg:#504945 fg:#fbf1c7"
+format = "[ 󰒋 $hostname ]($style)"
+
+[username]
+disabled = true
+
+[directory]
+style = "fg:#fbf1c7 bg:#d65d0e"
+format = "[ $path ]($style)"
+truncation_length = 3
+truncation_symbol = "…/"
+
+[directory.substitutions]
+"Documents" = "󰈙 "
+"Downloads" = " "
+
+[git_branch]
+symbol = ""
+style = "bg:#3c3836"
+format = '[[ $symbol $branch ](fg:#d79921 bg:#3c3836)]($style)'
+
+[git_status]
+style = "bg:#3c3836"
+format = '[[($all_status$ahead_behind )](fg:#fb4934 bg:#3c3836)]($style)'
+
+[nodejs]
+symbol = ""
+style = "bg:#282828"
+format = '[[ $symbol ($version) ](fg:#d79921 bg:#282828)]($style)'
+
+[python]
+symbol = ""
+style = "bg:#282828"
+format = '[[ $symbol ($version) ](fg:#d79921 bg:#282828)]($style)'
+
+[rust]
+symbol = ""
+style = "bg:#282828"
+format = '[[ $symbol ($version) ](fg:#d79921 bg:#282828)]($style)'
+
+[golang]
+symbol = ""
+style = "bg:#282828"
+format = '[[ $symbol ($version) ](fg:#d79921 bg:#282828)]($style)'
+
+[time]
+disabled = false
+time_format = "%R"
+style = "bg:#1d2021"
+format = '[[  $time ](fg:#a89984 bg:#1d2021)]($style)'
+
+[character]
+success_symbol = "[❯](bold #d79921)"
+error_symbol = "[❯](bold #fb4934)"
