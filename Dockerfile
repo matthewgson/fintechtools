@@ -701,6 +701,16 @@ eval "$(starship init zsh)"
 # shell's fork+exec stays inside fakechroot; only fzf's $SHELL hop escaped.)
 # --walker-skip prunes noise and keeps the occasional $HOME-wide scan bounded.
 export FZF_DEFAULT_OPTS='--height=40% --layout=reverse --border --info=inline --walker-skip=.git,node_modules,.cache,.Trash,.local/share'
+
+# yazi's zoxide jump (Z) runs fzf with a hardcoded --preview that lists the dir via
+# `sh -c 'ls …'`. Under udocker/F3 that sh ESCAPES the sandbox and crashes with a
+# relocation error (_dl_find_dso_for_object / GLIBC_PRIVATE — host ld.so paired with
+# the container's newer libc), and the constant crash also makes the picker's
+# C-j/C-k feel dead. The yazi zoxide plugin appends $YAZI_ZOXIDE_OPTS AFTER its own
+# options and fzf honors the LAST value, so hiding the preview window stops the
+# preview command from ever spawning. (The picker itself needs no subprocess —
+# zoxide pipes its directory list straight into fzf.)
+export YAZI_ZOXIDE_OPTS="--preview-window=hidden"
 EOF
 
 CMD ["/bin/zsh"]
