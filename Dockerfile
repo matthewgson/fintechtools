@@ -431,6 +431,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/* && \
     tmux -V && [ "$(command -v tmux)" = "/usr/local/bin/tmux" ]
 
+# ─── Stage 8h: ghostty terminfo (xterm-ghostty) ──────────────────────────────
+# Bake ghostty's OWN terminfo so connect_nvim.sh can pass the real
+# TERM=xterm-ghostty instead of forcing xterm-256color. The entry advertises Tc
+# (truecolor), setrgbf (RGB) and fullkbd (CSI-u extended keys), so tmux 3.6b
+# auto-detects truecolor AND the modern key encoding natively — the prefix and
+# vim-tmux-navigator work over SSH with no terminal-overrides / extended-keys
+# workarounds. Source dumped from the Mac's Ghostty.app via `infocmp -x`. tic is
+# from ncurses-bin (Stage 1).
+COPY configs/terminfo/xterm-ghostty.src /tmp/xterm-ghostty.src
+RUN tic -x -o /usr/share/terminfo /tmp/xterm-ghostty.src && \
+    rm /tmp/xterm-ghostty.src && \
+    infocmp xterm-ghostty >/dev/null && echo "xterm-ghostty terminfo installed"
+
 # NOTE: no glibc-matched libfakechroot is baked in for udocker's F3 mode. Under
 # F3, glibc NSS getpwuid() can't resolve our uid, so id/whoami show a bare number
 # (cosmetic — udocker_dev.sh exports USER/LOGNAME; every tool works). The proper

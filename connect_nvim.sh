@@ -82,9 +82,15 @@ unset _sz
 # Singularity/Apptainer can't start containers on compute nodes post-2026, so we
 # launch via ~/bin/$LAUNCHER instead (userspace udocker, Fakechroot/F3). It
 # forwards args to zsh, so `-i -c '...'` behaves like `singularity exec … zsh -i -c`.
+#
+# TERM: default to xterm-256color but upgrade to xterm-ghostty INSIDE the container
+# when the image carries ghostty's terminfo (baked in Dockerfile Stage 8h). With the
+# real ghostty TERM, tmux 3.6b auto-detects truecolor + CSI-u extended keys natively
+# (so C-Space and C-h/j/k/l work with no tmux.conf workarounds); images built before
+# that stage simply keep xterm-256color. The `infocmp` probe runs in the container.
 ssh \
     -J "$LOGIN_ALIAS" \
     -tt \
     "$REMOTE_USER@$NODE" \
     "TERM=xterm-256color COLUMNS=$COLS LINES=$ROWS _SSH_COLS=$COLS _SSH_ROWS=$ROWS \
-     ~/bin/$LAUNCHER -i -c 'stty cols $COLS rows $ROWS 2>/dev/null; exec zsh -i'"
+     ~/bin/$LAUNCHER -i -c 'infocmp xterm-ghostty >/dev/null 2>&1 && export TERM=xterm-ghostty; stty cols $COLS rows $ROWS 2>/dev/null; exec zsh -i'"
