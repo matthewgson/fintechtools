@@ -7,7 +7,7 @@ set -e # Exit on any error
 
 # Configuration
 IMAGE_NAME="fintech-tools"
-VERSION="0.8"
+VERSION="0.9"
 # Flat rootfs tar produced by `podman export` — deployed to CIRCE.
 ROOTFS_TAR="$HOME/fintech-rootfs.tar"
 REMOTE_USER="gson"

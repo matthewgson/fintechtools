@@ -1,4 +1,4 @@
-# FinTech Tools Container — v0.7
+# FinTech Tools Container — v0.9
 
 HPC container for Financial / Quantitative computing. Workflow has migrated
 from VSCode Remote-SSH (legacy, still works) to **Neovim** SSH.
