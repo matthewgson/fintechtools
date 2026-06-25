@@ -16,6 +16,11 @@ ARG YAZI_VERSION=v26.5.6
 ARG RESVG_VERSION=0.47.0
 ARG FZF_VERSION=0.73.1
 ARG ZOXIDE_VERSION=0.9.9
+# fd: installed as a STATIC musl binary (not apt's dynamic fd-find). Yazi's `z`/`Z`
+# spawn a child process (yazi→fzf→fd) whose exec() bypasses udocker's fakechroot
+# path-translation and lands on the RHEL7 host; a glibc-2.39 dynamic fd can't run
+# there, so it must be statically linked like fzf/zoxide. See Stage 8d below.
+ARG FD_VERSION=10.2.0
 ARG BOTTOM_VERSION=0.12.3
 # bookokrat = terminal PDF/EPUB reader (kitty graphics); the primary VimTeX/yazi
 # viewer now — renders in-terminal over SSH, no X11/XQuartz. Pinned to the Mac.
@@ -105,7 +110,8 @@ RUN apt-get update && \
     unixodbc-dev \
     # Neovim / LazyVim CLI deps
     ripgrep \
-    fd-find \
+    # fd is NOT installed from apt (its dynamic glibc-2.39 build can't survive the
+    # fakechroot exec-escape to the RHEL7 host) — built static in Stage 8d below.
     unzip \
     # Yazi required + recommended optional deps (per yazi-rs.github.io/docs/installation)
     file \
@@ -367,11 +373,14 @@ RUN RESVG_VERSION=${RESVG_VERSION} && \
     chmod +x /usr/local/bin/resvg && \
     rm /tmp/resvg.tar.gz
 
-# ─── Stage 8c: fzf + zoxide (pinned from GitHub) ────────────────────────────
-# Install from GitHub releases instead of apt to guarantee the latest versions.
-# Yazi's `z` interactive jump (zoxide --interactive → fzf) requires up-to-date
-# binaries; the apt packages on Ubuntu 24.04 are ~2023 builds which can cause
-# silent failures with newer yazi builds.
+# ─── Stage 8c: fzf + zoxide (pinned from GitHub — STATIC) ───────────────────
+# From GitHub releases, not apt: this pins current versions AND (the property
+# that actually matters here) ships STATIC binaries — fzf is Go-static, zoxide
+# is the musl build. Yazi's `z`/`Z` jumps spawn these via an exec() that escapes
+# udocker's fakechroot onto the RHEL7 host, where only static binaries run; the
+# apt builds (dynamic, glibc 2.39) would abort. fd gets the same treatment in
+# Stage 8d, and udocker_dev.sh copies all three onto the bind-identical
+# $HOME/.local/bin so the escaped lookup resolves to a host-valid path.
 RUN FZF_VERSION=${FZF_VERSION} && \
     echo "Installing fzf ${FZF_VERSION}" && \
     curl -L "https://github.com/junegunn/fzf/releases/download/v${FZF_VERSION}/fzf-${FZF_VERSION}-linux_amd64.tar.gz" \
@@ -386,6 +395,24 @@ RUN ZOXIDE_VERSION=${ZOXIDE_VERSION} && \
     tar -C /usr/local/bin -xzf /tmp/zoxide.tar.gz zoxide && \
     chmod +x /usr/local/bin/zoxide && \
     rm /tmp/zoxide.tar.gz
+
+# ─── Stage 8d: fd (STATIC musl — survives the fakechroot exec-escape) ─────────
+# Yazi's `z` (fzf jump) runs FZF_DEFAULT_COMMAND="fd …" via fzf, and fzf spawns it
+# with an exec() that bypasses udocker's fakechroot path-translation, so the child
+# is looked up and run against the *host* (RHEL7, glibc 2.17). apt's dynamic fd
+# (glibc 2.39) aborts there ("Command failed: fd …" in yazi). The musl static build
+# runs on any host, exactly like fzf (Go-static) and zoxide (musl-static). It also
+# gets copied onto $HOME/.local/bin at launch (udocker_dev.sh) so the escaped lookup
+# resolves to a host-valid path. Provides /usr/local/bin/fd directly (no fdfind shim).
+RUN FD_VERSION=${FD_VERSION} && \
+    echo "Installing fd ${FD_VERSION} (static musl)" && \
+    curl -fL "https://github.com/sharkdp/fd/releases/download/v${FD_VERSION}/fd-v${FD_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+        -o /tmp/fd.tar.gz && \
+    tar -xzf /tmp/fd.tar.gz -C /tmp && \
+    cp "/tmp/fd-v${FD_VERSION}-x86_64-unknown-linux-musl/fd" /usr/local/bin/fd && \
+    chmod +x /usr/local/bin/fd && \
+    rm -rf /tmp/fd.tar.gz "/tmp/fd-v${FD_VERSION}-x86_64-unknown-linux-musl" && \
+    /usr/local/bin/fd --version
 
 # ─── Stage 8e: bottom (process/system monitor — replaces htop) ───────────────
 RUN BOTTOM_VERSION=${BOTTOM_VERSION} && \
@@ -515,8 +542,7 @@ ENV XDG_CACHE_HOME=/home/gson/.cache
 # Aliases go into /etc/zsh/zshrc (sourced by all interactive zsh sessions)
 # rather than ~/.zshrc, because the home dir is bind-mounted from the host
 # at runtime and overwrites the image's copy.
-RUN ln -sf "$(which fdfind)" /usr/local/bin/fd 2>/dev/null || true && \
-    mkdir -p /etc/zsh && \
+RUN mkdir -p /etc/zsh && \
     cat > /etc/zsh/zshenv << 'EOF'
 # ──────────────────────────────────────────────────────────────────────────────
 # /etc/zsh/zshenv — sourced by EVERY zsh invocation (login, interactive,
