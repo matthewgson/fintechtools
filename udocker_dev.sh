@@ -112,21 +112,22 @@ if [ -n "$_root" ] && [ -f "$_root/opt/fakechroot/lib/libfakechroot.so" ]; then
     export UDOCKER_FAKECHROOT_SO="$_root/opt/fakechroot/lib/libfakechroot.so"
 fi
 
-# ── Expose spawn-from-container tools on a bind-identical path (yazi z/Z fix) ──
+# ── Expose zoxide→fzf on a bind-identical path (yazi `Z` fix) ─────────────────
 # udocker's fakechroot can't translate the exec() one CONTAINER binary makes to
 # launch ANOTHER: posix_spawn (Rust) and Go's runtime exec bypass the LD_PRELOAD
 # execve hook, so the child is resolved/run against the *host* root instead of the
-# container's. Yazi's zoxide/fzf jumps hit this — yazi→zoxide→fzf and yazi→fzf→fd
-# both failed with "could not find fzf" / "Command failed: fd". Fix: drop the static
-# tools onto $HOME/.local/bin, which is bind-mounted 1:1 (host path == container
-# path via -v $HOME:$HOME) and already on PATH, so the escaped lookup finds a
-# host-valid, statically-linked binary (fzf=Go-static, fd/zoxide=musl-static). Copy
-# (not symlink): a symlink would point into the node-local $UDOCKER_DIR ROOT and go
-# stale on the next node. Refreshed when the rootfs tar is newer than the copy.
+# container's. Yazi's `Z` (zoxide → fzf) hit this and failed with "could not find
+# fzf". Fix: drop the STATIC tools onto $HOME/.local/bin — bind-mounted 1:1
+# (-v $HOME:$HOME, so host path == container path) and already on PATH — so the
+# escaped lookup finds a host-valid, static binary (fzf=Go-static, zoxide=musl-
+# static). Copy not symlink: a symlink would point into the node-local
+# $UDOCKER_DIR ROOT and go stale next node. Refreshed when the rootfs tar is newer.
+# (fd is intentionally NOT exposed: fzf uses its built-in walker instead of
+# shelling out to fd, so nothing escapes to fd — see zshenv FZF_DEFAULT_OPTS.)
 if [ -n "$_root" ]; then
     _bindbin="$HOME/.local/bin"
     mkdir -p "$_bindbin" 2>/dev/null
-    for _t in fzf fd zoxide; do
+    for _t in fzf zoxide; do
         _src="$_root/usr/local/bin/$_t"
         [ -e "$_src" ] || continue
         if [ ! -e "$_bindbin/$_t" ] || [ "$_src" -nt "$_bindbin/$_t" ] \
