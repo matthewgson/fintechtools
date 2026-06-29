@@ -13,6 +13,11 @@
 -- Also routes the explorer's open action so PDFs open in bookokrat (terminal
 -- reader, tmux split) instead of the default opener; non-PDFs fall through to
 -- vim.ui.open (yazi/snacks preview images in-terminal; see pdf_open.lua).
+--
+-- Show hidden (dotfiles) and git-ignored files in the explorer by default
+-- (`hidden`/`ignored`). On the container we work in dotfile- and .gitignore-
+-- heavy trees and want them visible without toggling each session; the default
+-- `H` / `I` keymaps still flip them off when desired.
 return {
   {
     "folke/snacks.nvim",
@@ -23,6 +28,8 @@ return {
       picker = {
         sources = {
           explorer = {
+            hidden = true,
+            ignored = true,
             actions = {
               explorer_open = function(_, item)
                 if not (item and item.file) then
