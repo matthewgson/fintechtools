@@ -401,8 +401,13 @@ RUN LAZYGIT_VERSION=${LAZYGIT_VERSION} && \
 # via an exec() that escapes udocker's F3 fakechroot onto the RHEL7 host, where
 # the dynamic container git can't run and the host git is 1.8.3.1 (< 2.32).
 # udocker_dev.sh copies this bundle to the bind-identical $HOME/.local/git-static
-# and symlinks $HOME/.local/bin/git, so the escaped lookup resolves to this
-# recent, statically-linked git. (Local-only build would not survive the escape.)
+# and hands it to lazygit ALONE by wrapping /usr/local/bin/lazygit (real binary
+# moved to lazygit.real) with a shim that prepends the static-git dir to PATH, so
+# lazygit's escaped `git` resolves to this recent, statically-linked git. It is
+# deliberately NOT the general in-container `git`: a static binary is immune to
+# LD_PRELOAD, so libfakechroot never loads in it and the children it spawns
+# in-container (credential helper, pager, hooks) die with a glibc loader
+# relocation error. The dynamic /usr/bin/git stays the in-container git.
 COPY --from=gitstatic /opt/git-static /opt/git-static
 
 # ─── Stage 8: Yazi terminal file manager ────────────────────────────────────
