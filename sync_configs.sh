@@ -67,6 +67,16 @@ echo
 CONFIG_LIST=(avante.nvim github-copilot btm nvim yazi tmux bookokrat starship)
 CONFIGS_DIR="${SCRIPT_DIR}/configs"
 
+# LazyVim extras to DROP from the container's nvim config only. The nvim sync is
+# an overlay of your Mac's ~/.config/nvim, so any extra you enable locally (in
+# lazyvim.json) is otherwise pushed to CIRCE verbatim. Some make no sense on the
+# remote: e.g. the `rust` extra pulls in rustaceanvim + crates.nvim, which you
+# don't use there and which then fail to resolve ("Too many rounds of missing
+# plugins") and block the LazyVim dashboard. Listed extras are stripped from the
+# STAGED copy below — your Mac config keeps them. Match is a substring of the
+# extra's module path. Add more here as needed.
+CONTAINER_NVIM_EXCLUDE_EXTRAS=(lang.rust)
+
 HAVE_ZSHRC=0;    [ -f "${SCRIPT_DIR}/.zshrc" ]              && HAVE_ZSHRC=1
 HAVE_IGNORE=0;   [ -f "${SCRIPT_DIR}/.ignore" ]             && HAVE_IGNORE=1
 HAVE_TERM=0;     [ -f "${SCRIPT_DIR}/term_session.sh" ]     && HAVE_TERM=1
@@ -143,6 +153,48 @@ for cfg in "${CONFIG_LIST[@]}"; do
     print_warning "  Skipping missing: ~/.config/$cfg"
   fi
 done
+# ── Strip container-excluded LazyVim extras from the staged nvim config ───────
+# Edits only the STAGING copy, so your Mac's lazyvim.json is left intact. Also
+# drops the matching plugins from the staged lazy-lock.json so a remote
+# `:Lazy restore` doesn't try to reinstall them. No-op if jq/python3 are absent
+# or the file isn't staged.
+_LZ_JSON="$STAGING/.config/nvim/lazyvim.json"
+if [ -f "$_LZ_JSON" ] && [ ${#CONTAINER_NVIM_EXCLUDE_EXTRAS[@]} -gt 0 ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    EXCLUDES="${CONTAINER_NVIM_EXCLUDE_EXTRAS[*]}" \
+    python3 - "$_LZ_JSON" "$STAGING/.config/nvim/lazy-lock.json" <<'PY'
+import json, os, sys
+lv, lock = sys.argv[1], sys.argv[2]
+pats = os.environ.get("EXCLUDES", "").split()
+# map known extras -> the plugins they introduce, so we can also prune the lock
+extra_plugins = {"lang.rust": ["rustaceanvim", "crates.nvim"]}
+try:
+    d = json.load(open(lv))
+except Exception:
+    sys.exit(0)
+keep, dropped = [], []
+for e in d.get("extras", []):
+    (dropped if any(p in e for p in pats) else keep).append(e)
+if dropped:
+    d["extras"] = keep
+    json.dump(d, open(lv, "w"), indent=2)
+    print("  nvim: dropped extras -> " + ", ".join(dropped))
+    plugs = {pl for e in dropped for k, v in extra_plugins.items() if k in e for pl in v}
+    if plugs and os.path.exists(lock):
+        try:
+            L = json.load(open(lock))
+            for pl in plugs:
+                L.pop(pl, None)
+            json.dump(L, open(lock, "w"), indent=2)
+            print("  nvim: pruned lazy-lock -> " + ", ".join(sorted(plugs)))
+        except Exception:
+            pass
+PY
+  else
+    print_warning "  nvim: python3 not found — cannot strip excluded extras (${CONTAINER_NVIM_EXCLUDE_EXTRAS[*]})"
+  fi
+fi
+
 [ ${#_ok_cfg[@]} -gt 0 ] && _staged+=("~/.config/{$(IFS=,; echo "${_ok_cfg[*]}")}")
 
 if [ "$HAVE_ZSHRC" -eq 1 ]; then

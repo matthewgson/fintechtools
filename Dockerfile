@@ -696,6 +696,30 @@ RUN cat >> /etc/zsh/zshrc << 'EOF'
 alias vi="nvim"
 alias vim="nvim"
 
+# ── nvim self-heal: restore /tmp-reaped LazyVim plugin files ─────────────────
+# The plugin store is symlinked onto node-local /tmp (above) for speed, but
+# systemd-tmpfiles age-prunes /tmp: it deletes files untouched for N days —
+# INCLUDING tracked plugin sources — while leaving each plugin's .git intact.
+# lazy.nvim then still believes the plugin is installed and nvim errors on the
+# now-missing modules; under nvim 0.12 a single failed extra aborts the whole
+# spec import, leaving no dashboard ("Lazy doesn't open"). LazyVim/README.md is
+# never read by nvim, so it ages out exactly when a prune has hit — use it as a
+# one-stat canary (near-zero cost on the healthy path), and on a hit restore
+# every plugin's worktree from its own .git. Objects survive in .git so this is
+# offline; the in-container git also backfills blobless partial-clone gaps.
+# (`vi`/`vim` expand to `nvim`, so they get the heal too.)
+nvim() {
+    local _lazy="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy"
+    if [[ -d $_lazy/LazyVim && ! -f $_lazy/LazyVim/README.md ]]; then
+        print -u2 "nvim: repairing /tmp-reaped LazyVim plugin store ..."
+        local _r
+        for _r in $_lazy/*(/N); do
+            [[ -d $_r/.git ]] && command git -C "$_r" checkout -f -q -- . 2>/dev/null
+        done
+    fi
+    command nvim "$@"
+}
+
 # ── yazi shell wrapper ────────────────────────────────────────────────────────
 # Official wrapper from yazi-rs.github.io/docs/quick-start.
 # Use `y` instead of `yazi` so the shell follows yazi's working directory
