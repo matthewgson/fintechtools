@@ -140,6 +140,36 @@ if [ -n "$_root" ]; then
     done
 fi
 
+# ── Expose a host-runnable static git for lazygit (Go exec escape) ───────────
+# lazygit is Go; under F3 its exec() of `git` escapes fakechroot onto the RHEL7
+# host (same escape as yazi's Z→fzf above). There the dynamic container git
+# can't run and the host git is 1.8.3.1 — below lazygit's 2.32 floor, so it
+# refuses to start ("Git version must be at least 2.32.0"). The image ships a
+# FULLY STATIC git at /opt/git-static (no PT_INTERP -> runs as a bare host
+# process too). Deploy the whole bundle (git needs its libexec/templates/CA, not
+# just one binary) to the bind-identical, PERSISTENT $HOME/.local/git-static
+# (host path == container path) and symlink it onto PATH so the escaped lookup
+# resolves to a recent git. cp -a (not a symlink into the node-local ROOT) so it
+# survives /tmp wipes; the symlink target lives in the persistent home, so it
+# never dangles. RUNTIME_PREFIX makes git find its libexec relative to the
+# bundle, so the path is self-contained wherever it lands. Refreshed when the
+# rootfs tar is newer. (Inside the container ~/.local/bin precedes /usr/bin, so
+# the shell uses this git too; on the login node /usr/bin wins, so the system
+# git there is untouched.)
+if [ -n "$_root" ] && [ -d "$_root/opt/git-static" ]; then
+    _gitdst="$HOME/.local/git-static"
+    if [ ! -x "$_gitdst/bin/git" ] || [ "$FINTECH_TAR" -nt "$_gitdst/bin/git" ]; then
+        rm -rf "$_gitdst.tmp.$$" 2>/dev/null
+        if cp -a "$_root/opt/git-static" "$_gitdst.tmp.$$" 2>/dev/null; then
+            rm -rf "$_gitdst" 2>/dev/null
+            mv "$_gitdst.tmp.$$" "$_gitdst" 2>/dev/null
+        fi
+        rm -rf "$_gitdst.tmp.$$" 2>/dev/null
+    fi
+    mkdir -p "$HOME/.local/bin" 2>/dev/null
+    [ -x "$_gitdst/bin/git" ] && ln -sfn "$_gitdst/bin/git" "$HOME/.local/bin/git"
+fi
+
 # ── Claude Code config dir → node-local /tmp ─────────────────────────────────
 # ~/.claude is fsync/write-heavy and the network home is slow; relocate the whole
 # tree to fast local disk, seed from $HOME on first use per node, and sync the
@@ -201,6 +231,13 @@ ENVS=( --env="HOME=$HOME"
        --env="SHELL=/bin/zsh"
        --env="CLAUDE_CONFIG_DIR=$CC_LOCAL"
        --env="CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1" )
+
+# Point the static git (above) at its bundled CA so HTTPS remotes work both
+# in-container AND when lazygit's `git` escapes onto the RHEL7 host, whose CA
+# path differs from the binary's musl/Alpine default. Guarded: only set when the
+# bundle is present, so an older image without it keeps using the system CA.
+[ -f "$HOME/.local/git-static/ssl/cacert.pem" ] && \
+    ENVS+=( --env="GIT_SSL_CAINFO=$HOME/.local/git-static/ssl/cacert.pem" )
 
 # ── launch. Default to interactive zsh; forward args. NOT exec'd so the EXIT trap
 # (Claude sync-back) runs after the shell quits. --workdir starts in the real

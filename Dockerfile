@@ -1,5 +1,54 @@
 # Fintech Tools Container
 # Base: Ubuntu 24.04 LTS (Noble Numbat) — headless server edition
+
+# ─── Stage -1: static git (musl) for lazygit's fakechroot escape ────────────
+# lazygit is a Go binary; under udocker's F3 fakechroot its exec() of `git`
+# bypasses the LD_PRELOAD hook and resolves against the RHEL7 *host* (the same
+# escape this image already works around for yazi's Z→fzf). On the host the
+# dynamic container git can't run and the system git is 1.8.3.1 — below
+# lazygit's floor ("Git version must be at least 2.32.0"). Fix: build a FULLY
+# STATIC git (no PT_INTERP) that runs as a bare process on the host AND
+# in-container; udocker_dev.sh deploys it to the bind-identical ~/.local/bin so
+# the escaped lookup finds a recent git. Build notes (each one is load-bearing):
+#   -no-pie               Alpine gcc defaults to -fPIE -pie; with -static that
+#                         yields a *dynamic* PIE needing ld-musl (absent on
+#                         RHEL7). -no-pie => a classic, fully static ELF.
+#   NO_REGEX=NeedsStartEnd musl's regex lacks REG_STARTEND -> use git's bundled.
+#   --allow-multiple-definition  libidn2 (pulled via libpsl) bundles gnulib's
+#                         error(), colliding with git's own error().
+#   one `make … install`  a separate flag-less `make install` makes git detect
+#                         "new build flags" and silently rebuild dynamic+PIE.
+#   RUNTIME_PREFIX        git self-locates libexec relative to its real path, so
+#                         the bundle works wherever it's dropped at runtime.
+FROM alpine:3.20 AS gitstatic
+ARG GIT_STATIC_VERSION=2.43.0
+RUN apk add --no-cache \
+        build-base wget tar xz ca-certificates pkgconf binutils \
+        zlib-dev zlib-static openssl-dev openssl-libs-static \
+        curl-dev curl-static expat-dev expat-static \
+        nghttp2-static brotli-static zstd-static c-ares-static \
+        libidn2-static libunistring-static libpsl-static && \
+    cd /tmp && \
+    wget -q -O git.tar.xz "https://www.kernel.org/pub/software/scm/git/git-${GIT_STATIC_VERSION}.tar.xz" && \
+    tar xf git.tar.xz && cd "git-${GIT_STATIC_VERSION}" && \
+    make -j"$(nproc)" \
+        CC=gcc \
+        CFLAGS="-O2 -fno-pie" \
+        LDFLAGS="-static -no-pie -s -Wl,--allow-multiple-definition" \
+        CURL_LDFLAGS="$(pkg-config --static --libs libcurl)" \
+        NO_GETTEXT=1 NO_TCLTK=1 NO_PERL=1 NO_PYTHON=1 NO_REGEX=NeedsStartEnd \
+        RUNTIME_PREFIX=YesPlease \
+        prefix=/opt/git-static \
+        install && \
+    mkdir -p /opt/git-static/ssl && \
+    cp /etc/ssl/certs/ca-certificates.crt /opt/git-static/ssl/cacert.pem && \
+    cd /opt/git-static/libexec/git-core && \
+    rm -f git-daemon git-http-backend git-http-fetch git-http-push \
+          git-imap-send git-shell scalar git-sh-i18n--envsubst && \
+    rm -f /opt/git-static/bin/scalar /opt/git-static/bin/git-shell && \
+    [ -z "$(readelf -l /opt/git-static/bin/git | grep -i interpreter)" ] && \
+    /opt/git-static/bin/git version
+
 FROM ubuntu:24.04
 
 LABEL maintainer="Matthew Son"
@@ -346,6 +395,15 @@ RUN LAZYGIT_VERSION=${LAZYGIT_VERSION} && \
         -o /tmp/lazygit.tar.gz && \
     tar -C /usr/local/bin -xzf /tmp/lazygit.tar.gz lazygit && \
     rm /tmp/lazygit.tar.gz
+
+# ─── Stage 7b: static git bundle (host-runnable, for lazygit's escape) ──────
+# Built in the `gitstatic` Alpine stage at the top. lazygit (Go) spawns `git`
+# via an exec() that escapes udocker's F3 fakechroot onto the RHEL7 host, where
+# the dynamic container git can't run and the host git is 1.8.3.1 (< 2.32).
+# udocker_dev.sh copies this bundle to the bind-identical $HOME/.local/git-static
+# and symlinks $HOME/.local/bin/git, so the escaped lookup resolves to this
+# recent, statically-linked git. (Local-only build would not survive the escape.)
+COPY --from=gitstatic /opt/git-static /opt/git-static
 
 # ─── Stage 8: Yazi terminal file manager ────────────────────────────────────
 RUN YAZI_VERSION=${YAZI_VERSION} && \
