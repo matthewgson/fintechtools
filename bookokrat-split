@@ -17,6 +17,9 @@
 set -euo pipefail
 
 file=${1:?usage: bookokrat-split <file>}
+# Canonical path: reuse-matching below compares tags across callers (yazi,
+# nvim, vimtex) that may pass differently-spelled paths to the same file.
+file=$(realpath -- "$file" 2>/dev/null) || file=$1
 
 [[ -z "${NVIM:-}" && -n "${BK_NVIM:-}" ]] && export NVIM="$BK_NVIM"
 
@@ -39,6 +42,26 @@ else
 fi
 
 if (( ${#tmux_cmd[@]} )); then
+    # Reuse before relaunch: a fresh open costs ~3s (process start + PDF load
+    # + first retina render + upload), so if a pane in this session is already
+    # viewing THIS file, jump to it instead. Panes are tagged at creation with
+    # the pane-scoped user option @bkfile (apps can't clobber it, and it dies
+    # with the pane — no stale state).
+    # (No -F multi-field parsing: tmux replaces control chars — tabs included —
+    # with '_' in format output, fusing the fields. Query each pane instead.)
+    found=""
+    while read -r pane_id; do
+        tag=$("${tmux_cmd[@]}" show-options -p -t "$pane_id" -qv @bkfile 2>/dev/null) || true
+        if [[ -n "$pane_id" && "$tag" == "$file" ]]; then
+            found=$pane_id
+            break
+        fi
+    done < <("${tmux_cmd[@]}" list-panes -s "${target[@]}" -F '#{pane_id}' 2>/dev/null || true)
+    if [[ -n "$found" ]]; then
+        "${tmux_cmd[@]}" select-window -t "$found"
+        exec "${tmux_cmd[@]}" select-pane -t "$found"
+    fi
+
     # split-window runs its command via the shell; %q-quote the path so
     # spaces and special characters survive that extra shell layer.
     cmd="bookokrat --zen-mode $(printf '%q' "$file")"
@@ -47,7 +70,8 @@ if (( ${#tmux_cmd[@]} )); then
     if [[ -n "${NVIM:-}" ]]; then
         cmd="NVIM=$(printf '%q' "$NVIM") $cmd"
     fi
-    exec "${tmux_cmd[@]}" split-window -h "${target[@]}" "$cmd"
+    pane=$("${tmux_cmd[@]}" split-window -h "${target[@]}" -P -F '#{pane_id}' "$cmd")
+    exec "${tmux_cmd[@]}" set-option -p -t "$pane" @bkfile "$file"
 else
     exec bookokrat --zen-mode "$file"
 fi
