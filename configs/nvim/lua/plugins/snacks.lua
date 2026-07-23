@@ -36,7 +36,11 @@ return {
                   return
                 end
                 if item.file:match("%.pdf$") then
-                  vim.system({ "bookokrat-split", item.file })
+                  -- nvim 0.12 strips TERM/TMUX/NVIM from job children (even
+                  -- explicit env{} overrides), so bookokrat-split rediscovers
+                  -- tmux itself and takes the editor socket as BK_NVIM — a
+                  -- name nvim leaves alone.
+                  vim.system({ "bookokrat-split", item.file }, { env = { BK_NVIM = vim.v.servername } })
                 else
                   vim.ui.open(item.file)
                 end

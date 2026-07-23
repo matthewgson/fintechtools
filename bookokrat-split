@@ -1,20 +1,53 @@
 #!/usr/bin/env bash
 # Open a PDF/EPUB in bookokrat (terminal reader).
 # Inside tmux: launch in a new split pane. Otherwise: run in the current terminal.
+#
+# nvim 0.12 strips TERM, TMUX and NVIM from the environment of every child it
+# spawns — vim.system AND jobstart, and explicit env{} overrides are stripped
+# too (verified on v0.12.3). So when an nvim callsite (snacks explorer 'o',
+# gx/vim.ui.open, vimtex view) launches us, $TMUX is missing even though the
+# user works inside tmux, and a TMUX-only check would fall through to exec'ing
+# bookokrat on a pipe with no TTY (instant, invisible death). Recover both:
+#   tmux: if $TMUX is unset, discover the per-uid default server socket
+#         (override with BK_TMUX_SOCK) and target the attached client's
+#         session explicitly via -t.
+#   NVIM: nvim callsites pass their server socket as BK_NVIM (a name nvim
+#         does not strip); map it back so bookokrat's SyncTeX inverse search
+#         still jumps into the launching editor.
 set -euo pipefail
 
 file=${1:?usage: bookokrat-split <file>}
 
+[[ -z "${NVIM:-}" && -n "${BK_NVIM:-}" ]] && export NVIM="$BK_NVIM"
+
+# Resolve a tmux invocation + split target even when $TMUX was stripped.
+tmux_cmd=() target=()
 if [[ -n "${TMUX:-}" ]]; then
+    tmux_cmd=(tmux)
+else
+    sock="${BK_TMUX_SOCK:-/tmp/tmux-$(id -u)/default}"
+    if [[ -S "$sock" ]]; then
+        # Prefer the session an attached client is viewing; else first session.
+        # (|| true: a stale socket with no live server must not set -e us out.)
+        sess=$(tmux -S "$sock" list-clients -F '#{client_session}' 2>/dev/null | head -1) || true
+        [[ -n "$sess" ]] || sess=$(tmux -S "$sock" list-sessions -F '#{session_name}' 2>/dev/null | head -1) || true
+        if [[ -n "$sess" ]]; then
+            tmux_cmd=(tmux -S "$sock")
+            target=(-t "$sess")
+        fi
+    fi
+fi
+
+if (( ${#tmux_cmd[@]} )); then
     # split-window runs its command via the shell; %q-quote the path so
     # spaces and special characters survive that extra shell layer.
     cmd="bookokrat --zen-mode $(printf '%q' "$file")"
-    # If launched from Neovim (vimtex), carry its server socket into the pane
-    # so bookokrat's SyncTeX inverse search can jump back to that editor.
+    # Carry the launching editor's server socket into the pane so bookokrat's
+    # SyncTeX inverse search can jump back to that exact editor.
     if [[ -n "${NVIM:-}" ]]; then
         cmd="NVIM=$(printf '%q' "$NVIM") $cmd"
     fi
-    exec tmux split-window -h "$cmd"
+    exec "${tmux_cmd[@]}" split-window -h "${target[@]}" "$cmd"
 else
     exec bookokrat --zen-mode "$file"
 fi

@@ -15,7 +15,10 @@ return {
       local prev = vim.ui.open
       vim.ui.open = function(path, opt)
         if type(path) == "string" and path:lower():match("%.pdf$") then
-          vim.system({ "bookokrat-split", path })
+          -- nvim 0.12 strips TERM/TMUX/NVIM from job children (even explicit
+          -- env{} overrides), so bookokrat-split rediscovers tmux itself and
+          -- takes the editor socket as BK_NVIM — a name nvim leaves alone.
+          vim.system({ "bookokrat-split", path }, { env = { BK_NVIM = vim.v.servername } })
           return { wait = function() return { code = 0 } end }
         end
         return prev and prev(path, opt)
