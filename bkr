@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# bkr — read a CIRCE PDF locally in bookokrat (Mac-side helper).
+#
+# WHY: over SSH every first-visit page costs ~1-1.5s — the compute node renders
+# ~2500x3200 retina bitmaps (~32MB of pixels per page) and streams them as
+# chunked kitty escapes through tmux+SSH — while the PDF FILE is only ~0.5-5MB.
+# So invert it: move the file once, render where the display is. Local
+# bookokrat on the Mac renders a page in ~0.2-0.4s, displays via SHM (no
+# base64 chunking), and keystrokes have zero network RTT. bookokrat watches
+# the open file (notify) and reloads on change, so the default watch loop
+# makes a remote recompile show up here ~2s later — a live view for the
+# vimtex/latexmk loop.
+#
+# Usage:
+#   bkr                  # most recently opened remote PDF (container log)
+#   bkr -l               # pick from recent remote PDFs with fzf
+#   bkr <remote-path>    # specific PDF, e.g. /work/g/gson/.../main.pdf
+#   bkr -1 ...           # sync once, skip the watch loop
+#   bkr --sync-only ...  # sync + print local cache path, don't open (scripting)
+#
+# Env: BKR_HOST (ssh alias, default circe), BKR_CACHE (~/.cache/bkr),
+#      BKR_POLL (watch interval seconds, default 2).
+# Cached copies live under $BKR_CACHE/<remote path>; reading positions are the
+# Mac bookokrat's own (separate from the container's). SyncTeX inverse search
+# is not wired from the local viewer — use the remote viewer for that.
+
+# No set -e: transient ssh/rsync failures in the watch loop must not kill the
+# reader; setup-path failures are checked explicitly.
+set -uo pipefail
+
+HOST=${BKR_HOST:-circe}
+CACHE=${BKR_CACHE:-$HOME/.cache/bkr}
+POLL=${BKR_POLL:-2}
+# Container bookokrat's log on the CIRCE home — its "Loading PDF document:"
+# lines are the recency source for "what was I just reading/compiling".
+REMOTE_LOG='~/.local/state/bookokrat/bookokrat.log'
+
+die() { echo "bkr: $*" >&2; exit 1; }
+
+usage() { sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; }
+
+watch=1 sync_only=0 pick=0 target=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        -l|--list) pick=1 ;;
+        -1|--once) watch=0 ;;
+        --sync-only) sync_only=1 ;;
+        -*) die "unknown flag: $1 (see bkr -h)" ;;
+        *) target="$1" ;;
+    esac
+    shift
+done
+
+# Recent remote PDFs, most recent first, existing files only.
+recent_pdfs() {
+    ssh -o BatchMode=yes "$HOST" "
+        grep -h 'Loading PDF document: ' $REMOTE_LOG 2>/dev/null \
+        | sed 's/.*Loading PDF document: //' | tac | awk '!seen[\$0]++' \
+        | while IFS= read -r p; do [ -f \"\$p\" ] && printf '%s\n' \"\$p\"; done \
+        | head -20"
+}
+
+if [ -z "$target" ]; then
+    if [ "$pick" -eq 1 ] && command -v fzf >/dev/null 2>&1; then
+        target=$(recent_pdfs | fzf --prompt='remote pdf> ' --height=40%) || true
+    else
+        target=$(recent_pdfs | head -1)
+    fi
+    [ -n "$target" ] || die "no recent remote PDFs found (open one on CIRCE first, or pass a path)"
+fi
+case "$target" in /*) ;; *) die "need an absolute remote path (got: $target)" ;; esac
+
+local_path="$CACHE$target"
+mkdir -p "$(dirname "$local_path")" || die "cannot create cache dir"
+
+# %q-quote the remote path once; reused by rsync and the mtime poll.
+rq=$(printf '%q' "$target")
+
+fetch() {
+    rsync -t -q "$HOST:$rq" "$local_path"
+}
+
+echo "bkr: syncing $HOST:$target" >&2
+fetch || die "sync failed (is $HOST reachable and the path correct?)"
+# SyncTeX sidecar, if the manuscript has one (harmless if absent).
+rsync -t -q "$HOST:$(printf '%q' "${target%.pdf}").synctex.gz" \
+      "${local_path%.pdf}.synctex.gz" 2>/dev/null
+
+if [ "$sync_only" -eq 1 ]; then
+    printf '%s\n' "$local_path"
+    exit 0
+fi
+
+[ -t 0 ] && [ -t 1 ] || die "not a terminal — run bkr in a ghostty tab (or use --sync-only)"
+command -v bookokrat >/dev/null 2>&1 || die "bookokrat not installed on this Mac (brew install bookokrat)"
+
+# Watch loop: poll the remote mtime over the mux'd ssh; on change re-rsync.
+# The atomic tmp+rename rsync write fires bookokrat's notify watcher -> reload.
+if [ "$watch" -eq 1 ]; then
+    (
+        last=$(ssh -o BatchMode=yes "$HOST" "stat -c %Y -- $rq" 2>/dev/null)
+        while sleep "$POLL"; do
+            kill -0 $$ 2>/dev/null || exit 0   # parent gone -> stop
+            now=$(ssh -o BatchMode=yes "$HOST" "stat -c %Y -- $rq" 2>/dev/null) || continue
+            if [ -n "$now" ] && [ "$now" != "$last" ]; then
+                last=$now
+                fetch && echo "bkr: refreshed ($(date '+%H:%M:%S'))" >&2
+            fi
+        done
+    ) &
+    watcher=$!
+    trap 'kill "$watcher" 2>/dev/null' EXIT INT TERM
+fi
+
+exec_rc=0
+bookokrat --zen-mode "$local_path" || exec_rc=$?
+exit "$exec_rc"
