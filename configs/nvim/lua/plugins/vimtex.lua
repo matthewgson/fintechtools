@@ -29,14 +29,32 @@
 -- that lists lervag/vimtex) is what actually installs it.
 
 return {
-  {
-    "lervag/vimtex",
-    optional = true,
-    init = function()
-      -- general viewer → bookokrat-forward <line> <col> <tex> <pdf>.
-      vim.g.vimtex_view_method = "general"
-      vim.g.vimtex_view_general_viewer = "bookokrat-forward"
-      vim.g.vimtex_view_general_options = "@line @col @tex @pdf"
-    end,
-  },
+	{
+		"lervag/vimtex",
+		optional = true,
+		init = function()
+			-- general viewer → bookokrat-forward <line> <col> <tex> <pdf>.
+			vim.g.vimtex_view_method = "general"
+			vim.g.vimtex_view_general_viewer = "bookokrat-forward"
+			vim.g.vimtex_view_general_options = "@line @col @tex @pdf"
+
+			-- Silence VimTeX log messages that fire on plugin reload (e.g. after
+			-- `:Lazy update` / LazyVim's auto-update, which re-sources plugins over
+			-- any open .tex buffer). g:vimtex_log_ignore is a list of Vim regexes;
+			-- any VimTeX message matching one is still recorded in :VimtexLog but is
+			-- NOT echoed. This is the surgical mute — real compile errors
+			-- ("Compilation stopped!" etc.) still show. The Treesitter entry below
+			-- covers the "Syntax highlighting is controlled by Treesitter!" warning
+			-- that VimTeX emits when it reloads over a buffer whose highlighting
+			-- LazyVim hands to treesitter. If a DIFFERENT message keeps popping up,
+			-- open :VimtexLog to copy its exact wording and add it as another
+			-- pattern here (substrings work; it's a non-anchored Vim regex match).
+			--
+			-- (Blunt alternative, if ever wanted: `vim.g.vimtex_log_verbose = 0`
+			-- silences every VimTeX message — but that also hides genuine errors.)
+			vim.g.vimtex_log_ignore = {
+				"Syntax highlighting is controlled by Treesitter",
+			}
+		end,
+	},
 }

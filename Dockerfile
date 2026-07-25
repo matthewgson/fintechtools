@@ -279,6 +279,25 @@ local({
 })
 EOF
 
+# ─── Stage 5b-2: R language server (nvim LSP for R) ─────────────────────────
+# Bakes the CRAN `languageserver` package into the system R library so nvim's
+# `r_language_server` LSP works out of the box — it is launched as
+# `R --no-echo -e languageserver::run()` off the `R` already on $PATH.
+#
+# Pulled as a PRECOMPILED PPM binary (via the Stage 5b Rprofile.site repo +
+# User-Agent), NOT compiled from source: install.packages() downloads the
+# Ubuntu-Noble binary (and its binary deps) in seconds. Rscript sources
+# Rprofile.site, so the PPM repo/UA set there apply here.
+#
+# This deliberately REPLACES Mason's `r-languageserver` install path, which in
+# the container tries to build languageserver into a per-user Mason tree on the
+# slow HPC filesystem and routinely fails to find/install it. The container
+# nvim config (configs/nvim/lua/plugins/r.lua) sets `mason = false` on
+# r_language_server so the LSP uses THIS system copy instead of Mason.
+RUN Rscript -e 'install.packages("languageserver")' && \
+    Rscript -e 'if (!requireNamespace("languageserver", quietly = TRUE)) quit(status = 1)' && \
+    echo "languageserver $(Rscript -e 'cat(as.character(packageVersion("languageserver")))') installed into $(Rscript -e 'cat(find.package("languageserver"))')"
+
 # ─── Stage 5c: Quarto (scientific publishing — .qmd → PDF/HTML/Word) ────────
 # Quarto bundles its own pandoc and Deno runtime.  LaTeX for PDF output is
 # provided by Stage 5d (TinyTeX) below.
