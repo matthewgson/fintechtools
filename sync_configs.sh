@@ -7,12 +7,17 @@
 set -e
 
 REMOTE_USER="gson"
-REMOTE_HOST="circe.rc.usf.edu"
+# Address the login node by its ~/.ssh/config ALIAS, never by hostname — the
+# alias is what supplies circe_key, the shared ControlPath and the keepalives.
+# See ssh_master.sh for the full reasoning (raw hostname = no key = password
+# fallback = failed auths on a key-only account).
+REMOTE_HOST="circe"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Fixed persistent socket path — reused across invocations so you only enter
-# your password once per ControlPersist window (2 hours).
-SSH_SOCKET="$HOME/.ssh/circe_mux"
+# Shared login-node connection budget: one master per run, on the socket path
+# ~/.ssh/config defines, with a 15-minute backoff after a refusal that is shared
+# with connect_nvim.sh and build_container.sh.
+. "${SCRIPT_DIR}/ssh_master.sh"
 
 # Colors
 RED='\033[0;31m'
@@ -27,32 +32,18 @@ print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SSH mux — fixed socket so the master persists between script runs.
-# First call: prompts for password and opens master (ControlPersist=2h).
-# Subsequent calls within 2h: reuses existing master, zero prompts.
+# SSH mux — provided by ssh_master.sh (sourced above). circe_ensure_master()
+# reuses a live master, clears a stale socket before dialing, opens exactly one
+# connection, and refuses to redial for 15 min after the login node blocks us.
 # ─────────────────────────────────────────────────────────────────────────────
-ensure_ssh_mux() {
-  mkdir -p "$(dirname "$SSH_SOCKET")"
-  # Check if an existing master is still alive
-  if ssh -O check -o ControlPath="$SSH_SOCKET" "${REMOTE_USER}@${REMOTE_HOST}" 2>/dev/null; then
-    print_status "✓ Reusing existing SSH connection to ${REMOTE_HOST}"
-    return 0
-  fi
-  print_status "Opening SSH connection to ${REMOTE_HOST} (one-time password prompt, valid 2h)..."
-  ssh -fNM \
-    -o ControlMaster=yes \
-    -o ControlPath="$SSH_SOCKET" \
-    -o ControlPersist=2h \
-    -o ServerAliveInterval=60 \
-    -o ServerAliveCountMax=3 \
-    "${REMOTE_USER}@${REMOTE_HOST}"
-  print_success "✓ SSH master connection established"
-}
+ensure_ssh_mux() { circe_ensure_master; }
 
-# Consistent ssh/rsync wrapper — always routes through the mux socket
-SSH_CMD="ssh -o ControlMaster=auto -o ControlPath=${SSH_SOCKET}"
+# ssh/rsync wrapper. No -o ControlPath override: the alias already carries it
+# from ~/.ssh/config, and hardcoding a second copy is how the scripts drifted
+# onto different sockets (each one then its own login) in the first place.
+SSH_CMD="ssh"
 
-remote_ssh() { $SSH_CMD "${REMOTE_USER}@${REMOTE_HOST}" "$@"; }
+remote_ssh() { $SSH_CMD "${REMOTE_HOST}" "$@"; }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main
@@ -103,8 +94,22 @@ echo
 
 # ── Local installs (no SSH needed) ───────────────────────────────────────────
 if [ "$HAVE_CONNECT" -eq 1 ]; then
-  cp "${SCRIPT_DIR}/connect_nvim.sh" "$HOME/connect_nvim.sh" && chmod +x "$HOME/connect_nvim.sh"
-  print_success "✓ connect_nvim.sh → ~/connect_nvim.sh"
+  # This cp is a ONE-WAY install (repo → ~), so a fix made live in
+  # ~/connect_nvim.sh and not ported back here is silently reverted by the next
+  # sync. That nearly ate the 2026-07-28 connection-budget patch (ensure_master).
+  # Refuse to overwrite a home copy that is newer AND different; the fix belongs
+  # in the repo, where it also gets committed.
+  if [ -f "$HOME/connect_nvim.sh" ] \
+     && ! cmp -s "${SCRIPT_DIR}/connect_nvim.sh" "$HOME/connect_nvim.sh" \
+     && [ "$HOME/connect_nvim.sh" -nt "${SCRIPT_DIR}/connect_nvim.sh" ]; then
+    print_warning "~/connect_nvim.sh is NEWER than the repo copy and differs — not overwriting."
+    print_warning "  Port the live edits into ${SCRIPT_DIR}/connect_nvim.sh, then re-run:"
+    print_warning "    cp ~/connect_nvim.sh '${SCRIPT_DIR}/connect_nvim.sh'"
+    print_warning "  (diff: diff -u '${SCRIPT_DIR}/connect_nvim.sh' ~/connect_nvim.sh)"
+  else
+    cp "${SCRIPT_DIR}/connect_nvim.sh" "$HOME/connect_nvim.sh" && chmod +x "$HOME/connect_nvim.sh"
+    print_success "✓ connect_nvim.sh → ~/connect_nvim.sh"
+  fi
 fi
 
 # ── Open (or reuse) SSH master ────────────────────────────────────────────────
@@ -238,7 +243,7 @@ remote_ssh "mkdir -p ~/.config ~/sh ~/bin ~/.local/bin" 2>/dev/null
 # ONE rsync call for all remote files
 echo
 print_status "Syncing to CIRCE: ${_staged[*]}"
-if rsync -avz -e "$SSH_CMD" "$STAGING/" "${REMOTE_USER}@${REMOTE_HOST}:~/"; then
+if rsync -avz -e "$SSH_CMD" "$STAGING/" "${REMOTE_HOST}:~/"; then
   print_success "✓ All files synced to CIRCE"
   print_status "Tip — run once inside the container on CIRCE to set up starship:"
   echo "    starship preset nerd-font-symbols -o ~/.config/starship.toml"

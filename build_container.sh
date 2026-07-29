@@ -11,7 +11,11 @@ VERSION="0.9"
 # Flat rootfs tar produced by `podman export` — deployed to CIRCE.
 ROOTFS_TAR="$HOME/fintech-rootfs.tar"
 REMOTE_USER="gson"
-REMOTE_HOST="circe.rc.usf.edu"
+# The ~/.ssh/config Host ALIAS, not the hostname. ssh matches Host patterns
+# against the name on the command line, so `gson@circe.rc.usf.edu` misses the
+# `Host circe` block entirely — losing IdentityFile circe_key (→ password
+# fallback on a key-only account) and the shared ControlPath (→ its own login).
+REMOTE_HOST="circe"
 # Rootfs tar destination on CIRCE. Home is persistent AND backed up (unlike
 # /work, purged at 6 months); the tar is read only once per node at unpack, so
 # its slightly slower bulk read off the home FS doesn't affect runtime. Both
@@ -20,6 +24,10 @@ REMOTE_ROOTFS_DIR="/home/g/${REMOTE_USER}/fintech-sb"
 REMOTE_ROOTFS_PATH="${REMOTE_ROOTFS_DIR}/fintech-rootfs.tar"
 # Repo dir — so the build can chain ./sync_configs.sh at the end (one-shot deploy).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Shared login-node connection budget (one master per run, 15-min backoff after a
+# refusal, shared with sync_configs.sh + connect_nvim.sh). See ssh_master.sh.
+. "${SCRIPT_DIR}/ssh_master.sh"
 
 # Colors for output
 RED='\033[0;31m'
@@ -184,37 +192,26 @@ purge_old_images() {
 # SSH connection multiplexer
 
 setup_ssh_mux() {
-  # Reuse the SHARED master socket (~/.ssh/circe_mux) that sync_configs.sh and
-  # interactive sessions keep open — so if a connection is already up there's no
-  # new login at all. A private throwaway socket (the old behaviour) forced a
-  # fresh auth that CIRCE's 2FA breaks under a backgrounded `ssh -fNM`, which is
-  # why it warned "multiplexing unavailable" and then prompted on every transfer.
-  SSH_CONTROL_SOCKET="$HOME/.ssh/circe_mux"
-  mkdir -p "$(dirname "${SSH_CONTROL_SOCKET}")" 2>/dev/null
-  if ssh -O check -o ControlPath="${SSH_CONTROL_SOCKET}" "${REMOTE_USER}@${REMOTE_HOST}" 2>/dev/null; then
-    print_success "✓ Reusing existing SSH connection to ${REMOTE_HOST} (multiplexed)"
-    return 0
-  fi
-  print_status "Opening SSH connection to ${REMOTE_HOST} (enter password once for all transfers)..."
-  if ssh -fNM \
-    -o ControlMaster=yes \
-    -o ControlPath="${SSH_CONTROL_SOCKET}" \
-    -o ControlPersist=2h \
-    -o ServerAliveInterval=60 \
-    -o ServerAliveCountMax=3 \
-    "${REMOTE_USER}@${REMOTE_HOST}"; then
-    print_success "✓ SSH connection established (multiplexed)"
-  else
-    print_warning "SSH multiplexing unavailable — transfers will prompt individually"
-    SSH_CONTROL_SOCKET=""
-  fi
+  # Delegated to ssh_master.sh (sourced at the top) — the same helper
+  # sync_configs.sh uses, so both ride ONE master on the socket path
+  # ~/.ssh/config defines, and a refusal seen by either backs both off.
+  #
+  # Two things the old local implementation got wrong, both silent:
+  #   * it hardcoded ~/.ssh/circe_mux, a socket path nothing else uses any more,
+  #     so it never found the live master and always dialed its own;
+  #   * on failure it blanked SSH_CONTROL_SOCKET and carried on "prompting
+  #     individually" — i.e. one fresh connection per transfer, which is exactly
+  #     the burst that gets this source IP firewalled. circe_ensure_master exits
+  #     instead. The built tar is already on disk, so a re-run after the block
+  #     clears costs nothing but the transfer.
+  circe_ensure_master
 }
 
 teardown_ssh_mux() {
-  # Leave the shared ~/.ssh/circe_mux master alive — ControlPersist reaps it, and
-  # sync_configs.sh (chained after the build) plus your own sessions reuse it.
-  # Just drop our reference; do NOT `ssh -O exit` the shared socket.
-  SSH_CONTROL_SOCKET=""
+  # Leave the shared master alive — ControlPersist reaps it, and sync_configs.sh
+  # (chained after the build) plus your own sessions reuse it for free.
+  # Do NOT `ssh -O exit` it.
+  :
 }
 
 # Main function
@@ -418,8 +415,11 @@ collect_transfer_decisions() {
 # Config/script syncing lives in sync_configs.sh (separate lightweight script).
 # ─────────────────────────────────────────────────────────────────────────────
 execute_all_transfers() {
+  # No ControlPath override — ${REMOTE_HOST} is the ~/.ssh/config alias, which
+  # already carries ControlMaster/ControlPath, so ssh and scp ride the master
+  # opened by setup_ssh_mux as channels. Hardcoding a second socket path here is
+  # how this script drifted off the shared master.
   local -a MUX=()
-  [ -n "$SSH_CONTROL_SOCKET" ] && MUX=(-o ControlMaster=auto -o ControlPath="${SSH_CONTROL_SOCKET}")
 
   if [ "${XFER_ROOTFS:-0}" -eq 0 ]; then
     print_status "Rootfs-tar transfer skipped. Run ./sync_configs.sh to push configs."

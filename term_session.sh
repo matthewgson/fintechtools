@@ -35,6 +35,11 @@ fi
 # Capture start time in human-readable format
 START_TIME=$(date '+%Y-%m-%d %H:%M:%S %Z')
 
+# Retained for reference only. Deliberately NOT used in the printed connect
+# instructions any more: telling the Mac side to `ssh -J gson@circe.rc.usf.edu`
+# addresses the login node by hostname, which misses the `Host circe` block in
+# ~/.ssh/config (no circe_key, no shared ControlPath) and opens a brand-new
+# login every time. Use the aliases instead — see ssh_master.sh.
 LOGIN_NODE="circe.rc.usf.edu"
 
 # Set up cleanup function for graceful shutdown
@@ -82,7 +87,7 @@ echo "Start Time: $START_TIME"
 echo "Compute Node: $COMPUTE_NODE"
 echo "Node IP: $NODE_IP"
 echo "Container: fintech-tools rootfs via $CONTAINER_RUNTIME (CPU only)"
-echo "Connect: ssh -J gson@$LOGIN_NODE -t gson@$COMPUTE_NODE '$LAUNCHER -i'"
+echo "Connect: ./connect_nvim.sh $COMPUTE_NODE   (or: ssh -t $COMPUTE_NODE '$LAUNCHER -i')"
 echo "========================================="
 
 # ─── Pre-warm the node-local container ───────────────────────────────────────
@@ -102,9 +107,10 @@ echo ""
 echo " From Mac, run:"
 echo "   ./connect_nvim.sh"
 echo ""
-echo " Or manually:"
-echo "   ssh -J gson@$LOGIN_NODE -t gson@$COMPUTE_NODE \\"
-echo "     '$LAUNCHER -i'"
+echo " Or manually (use the ~/.ssh/config ALIAS, not -J gson@<login-hostname>:"
+echo "  the Host mdc-*/svc-* block already sets ProxyJump circe, and the alias is"
+echo "  what rides the existing master instead of opening a new login):"
+echo "   ssh -t $COMPUTE_NODE '$LAUNCHER -i'"
 echo ""
 echo " Reconnect freely from another shell — each connection launches its own"
 echo " container against the shared node-local /tmp."
