@@ -33,6 +33,23 @@ return {
 		"lervag/vimtex",
 		optional = true,
 		init = function()
+			-- ── Version guard override ────────────────────────────────────────────
+			-- VimTeX only supports the CURRENT stable Vim/Neovim: its
+			-- ftplugin/tex.vim aborts with
+			--     Error: VimTeX does not support your version of Vim
+			-- unless `has('nvim-0.12.4')` (or Vim 9.2). Under nvim 0.12 that echoerr
+			-- kills the whole BufReadPost → FileType autocmd chain, so treesitter
+			-- highlighting never attaches either — the .tex buffer opens uncolored.
+			-- The container's nvim is pinned in the Dockerfile (ARG NVIM_VERSION) and
+			-- is only rebuilt occasionally, so it lags whatever VimTeX HEAD demands.
+			-- `vimtex_version_check = 0` is VimTeX's own documented escape hatch
+			-- (:h vimtex_version_check) — it loads anyway, at the cost of upstream
+			-- ignoring bug reports from the older version. Safe here: the gap is one
+			-- patch release (image 0.12.3 vs required 0.12.4). Keep this in place;
+			-- it's a no-op once the image catches up, and it avoids the .tex buffer
+			-- breaking every time VimTeX bumps its floor ahead of the pinned nvim.
+			vim.g.vimtex_version_check = 0
+
 			-- general viewer → bookokrat-forward <line> <col> <tex> <pdf>.
 			vim.g.vimtex_view_method = "general"
 			vim.g.vimtex_view_general_viewer = "bookokrat-forward"
