@@ -1,0 +1,53 @@
+# container.gitconfig — git config for the IN-CONTAINER git only.
+#
+# Deployed by sync_configs.sh to ~/.config/git/container.gitconfig and activated
+# by udocker_dev.sh via --env=GIT_CONFIG_GLOBAL. It is NOT one of git's
+# auto-discovered files (that would be ~/.config/git/config), so nothing reads it
+# unless GIT_CONFIG_GLOBAL points here — i.e. the RHEL7 host's git is untouched.
+#
+# ─── Why this file exists ────────────────────────────────────────────────────
+# `credential.helper` is MULTI-VALUED: git accumulates every helper it finds
+# across system -> global -> local and consults them IN ORDER, stopping at the
+# first that answers. CIRCE's ~/.gitconfig sets `helper = store`, and
+# ~/.git-credentials held a stale token for matthewgson@github.com. Because store
+# came first, git handed over that dead token on every attempt and never fell
+# through to gh — and store returns the same bad credential on every retry, so it
+# failed identically each time. That is why in-container pushes/pulls (and
+# lazygit) never got anywhere.
+#
+# An EMPTY helper value resets the accumulated list. Since this file is loaded as
+# the global config and the reset appears BEFORE the real helper, the inherited
+# `store` is discarded and gh is left as the only helper. `[include]` pulls the
+# rest of ~/.gitconfig (user.name/email, http.postBuffer) back in first, so
+# nothing else is lost. A missing include path is silently ignored by git.
+#
+# Note this CANNOT be done in /etc/gitconfig: system config is parsed BEFORE
+# global, so ~/.gitconfig's `store` would just be appended after the reset and
+# win again. It has to sit at global level or later — hence GIT_CONFIG_GLOBAL.
+#
+# ─── Why `gh auth git-credential` ────────────────────────────────────────────
+# gh mints a fresh token from ~/.config/gh/hosts.yml on every call, so there is
+# no stored credential to go stale, and no `store` helper to ERASE the file on a
+# 401 (the failure mode that wiped ~/.git-credentials once before). gh used as a
+# LEAF like this is safe under udocker's F3 fakechroot — it spawns no child, so it
+# never hits the static-binary escape that breaks `gh repo clone` (see the gh
+# wrapper in udocker_dev.sh). The absolute path is deliberate: git runs credential
+# helpers via /bin/sh with whatever PATH the caller had, and a bare `gh` breaks
+# when that PATH differs (e.g. a git spawned by another tool).
+#
+# LIMITATION — this does NOT work for lazygit. lazygit is a Go binary whose
+# exec() of `git` escapes fakechroot onto the host, so it runs the STATIC git,
+# and git always launches credential helpers through /bin/sh — which under that
+# escape dies with "relocation error: ... _dl_find_dso_for_object". Verified for
+# every helper form, including a bare absolute path and with LD_PRELOAD/
+# LD_LIBRARY_PATH sanitized. lazygit therefore gets a token-in-header config
+# instead, written fresh at each launch by the wrapper in udocker_dev.sh.
+
+[include]
+	path = ~/.gitconfig
+
+[credential]
+	# Discard every helper inherited above (notably `store`).
+	helper =
+	# ...leaving gh as the only one.
+	helper = !/usr/local/bin/gh auth git-credential

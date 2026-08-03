@@ -55,7 +55,7 @@ echo "========================================="
 echo
 
 # ── Discover what exists ──────────────────────────────────────────────────────
-CONFIG_LIST=(avante.nvim github-copilot btm nvim yazi tmux bookokrat starship)
+CONFIG_LIST=(avante.nvim github-copilot btm nvim yazi tmux bookokrat starship git)
 CONFIGS_DIR="${SCRIPT_DIR}/configs"
 
 # LazyVim extras to DROP from the container's nvim config only. The nvim sync is
@@ -133,6 +133,11 @@ for cfg in "${CONFIG_LIST[@]}"; do
   _is_replace=0; _is_overlay=0
   case "$cfg" in
     yazi) _is_replace=1 ;;
+    # repo owns the container-only git config (container.gitconfig). rsync has no
+    # --delete, so an existing ~/.config/git/config on CIRCE is left alone — and
+    # git never auto-reads container.gitconfig anyway (only GIT_CONFIG_GLOBAL,
+    # set by udocker_dev.sh, points at it).
+    git) _is_replace=1 ;;
     tmux) _is_replace=1 ;;   # repo owns the container tmux.conf (no Mac copy)
     bookokrat) _is_replace=1 ;;   # repo owns the container bookokrat config
     starship) _is_replace=1 ;;   # repo owns the container prompt (warm SSH theme; Mac keeps its own)
