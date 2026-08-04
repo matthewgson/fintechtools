@@ -571,9 +571,29 @@ RUN mkdir -p -m 755 /etc/apt/keyrings && \
 #     Copilot plugins (copilot.lua, avante.nvim) — inline completions + chat.
 # tree-sitter-cli                 : required by nvim-treesitter to compile parsers.
 #
+# claude-auto-retry              : retries a Claude Code session automatically on
+#     subscription rate limits and sustained API overload (529/500/503) with
+#     exponential backoff. Zero deps, needs node >= 18 (we ship 24) and tmux >= 2.1
+#     (we ship 3.6b), so both prerequisites are already satisfied in this image.
+#
 # The standalone GitHub Copilot CLI (@github/copilot) is intentionally NOT
 # installed — run it locally if you need it.
-RUN npm install -g @anthropic-ai/claude-code @github/copilot-language-server tree-sitter-cli
+RUN npm install -g @anthropic-ai/claude-code @github/copilot-language-server tree-sitter-cli \
+        claude-auto-retry
+
+# ─── Stage 11a: claude-auto-retry shell wrapper — NOT via its own installer ───
+# `claude-auto-retry install` does two things: verify tmux, then inject a `claude()`
+# shell function into ~/.bashrc / ~/.zshrc. Running it here would be useless AND
+# running it at runtime would be undone:
+#   * at BUILD time, $HOME is bind-mounted over at runtime, so anything written to
+#     ~/.zshrc during the build is invisible on CIRCE (same reason LazyVim isn't
+#     bootstrapped here — see the note below);
+#   * at RUN time, this repo OWNS ~/.zshrc — sync_configs.sh rsyncs the repo copy
+#     over it, so an injected wrapper is silently reverted by the next sync.
+# So the wrapper lives in the repo's .zshrc instead, keyed on the upstream marker
+# comments (`# >>> claude-auto-retry >>>`) so that `claude-auto-retry install` /
+# `uninstall` still recognise and replace/remove it cleanly if ever run by hand.
+# Nothing to do in the image beyond the npm install above.
 
 # ─── Stage 11b: Starship prompt ──────────────────────────────────────────────
 RUN curl -sS https://starship.rs/install.sh | sh -s -- --yes

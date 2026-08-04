@@ -77,3 +77,46 @@ _nvim_heal() {
 nvim() { _nvim_heal; command nvim "$@"; }
 alias vi=nvim
 alias vim=nvim
+
+# ── claude-auto-retry ────────────────────────────────────────────────────────
+# Auto-retries a Claude Code session when it hits a subscription rate limit or
+# sustained API overload (529/500/503), with exponential backoff. Installed into
+# the image by the Dockerfile (`npm i -g claude-auto-retry`, Stage 11).
+#
+# This block is what `claude-auto-retry install` would have injected. It is kept
+# HERE, in the repo's .zshrc, rather than being installed at runtime, because
+# sync_configs.sh rsyncs this file over CIRCE's ~/.zshrc — a runtime-injected
+# wrapper would be silently reverted by the next config sync. The upstream marker
+# comments are preserved verbatim so `claude-auto-retry install` / `uninstall`
+# still find, replace, or remove this block cleanly if ever run by hand.
+#
+# Only the zsh branch of upstream's src/wrapper.sh is kept (this file is only ever
+# sourced by zsh). The launcher path is the image's npm global root; the `-e` guard
+# means an older image without the package degrades to plain `claude` instead of
+# breaking the command. Requires tmux (image ships 3.6b) — the monitor runs in a
+# tmux pane, so start Claude from inside a tmux session (`tm`) to get retries.
+# >>> claude-auto-retry >>>
+# Drop any pre-existing `claude` alias (Claude Code's own installer adds one)
+# before defining the wrapper function. Without this, the shell expands the
+# alias while parsing `claude() {`, producing "syntax error near unexpected
+# token '('" when the rc file is sourced.
+unalias claude 2>/dev/null || true
+claude() {
+  # Degrade to plain claude if already inside a wrapped session, or if the launcher
+  # is gone (package removed via `npm uninstall -g`, or an image predating it) — an
+  # orphaned wrapper must never break the claude command.
+  if [ "${CLAUDE_AUTO_RETRY_ACTIVE}" = "1" ] || [ ! -e "/usr/lib/node_modules/claude-auto-retry/src/launcher.js" ]; then
+    command claude "$@"
+    return $?
+  fi
+  export CLAUDE_AUTO_RETRY_ACTIVE=1
+  local _car_exit
+  # zsh: localtraps restores the user's INT/TERM traps automatically on return.
+  setopt localoptions localtraps
+  trap 'unset CLAUDE_AUTO_RETRY_ACTIVE' INT TERM
+  node "/usr/lib/node_modules/claude-auto-retry/src/launcher.js" "$@"
+  _car_exit=$?
+  unset CLAUDE_AUTO_RETRY_ACTIVE
+  return $_car_exit
+}
+# <<< claude-auto-retry <<<
