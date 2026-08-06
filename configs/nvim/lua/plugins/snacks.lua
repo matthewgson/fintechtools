@@ -18,26 +18,73 @@
 -- (`hidden`/`ignored`). On the container we work in dotfile- and .gitignore-
 -- heavy trees and want them visible without toggling each session; the default
 -- `H` / `I` keymaps still flip them off when desired.
+-- Dashboard header art, stored as a LIST OF LINES and padded to a common display
+-- width at runtime.
+--
+-- snacks centers each header line INDEPENDENTLY, so lines of unequal width sit
+-- staggered instead of reading as one block. The previous ANSI Shadow art broke
+-- exactly that way: the figlet "E" carries trailing spaces on two of its six rows,
+-- something stripped them, and the rows then measured 74/74/72/72/74/75 — the two
+-- short ones visibly offset. Padding here means no whitespace-trimming editor or
+-- formatter can reintroduce that; the art is stored ragged on purpose.
+--
+-- strdisplaywidth, not #, because the art is multi-byte.
+local function padded(lines)
+  local width = 0
+  for _, line in ipairs(lines) do
+    width = math.max(width, vim.fn.strdisplaywidth(line))
+  end
+  local out = {}
+  for i, line in ipairs(lines) do
+    out[i] = line .. string.rep(" ", width - vim.fn.strdisplaywidth(line))
+  end
+  return table.concat(out, "\n")
+end
+
 return {
   {
     "folke/snacks.nvim",
     opts = {
-      -- Match the local LazyVim dashboard (same keymaps/sections), but render
-      -- the header as "NVIM-CIRCE" instead of "NEOVIM" so it's obvious at a
-      -- glance that this session is the CIRCE container, not the local Mac.
-      -- ASCII art is the ANSI Shadow figlet font (same font as local NEOVIM).
+      -- Match the local LazyVim dashboard (same keymaps/sections), but stack a
+      -- CIRCE wordmark under the logo so it's obvious at a glance that this
+      -- session is the CIRCE container, not the local Mac. (Previously the whole
+      -- header spelled "NVIM-CIRCE" in ANSI Shadow figlet.)
+      --
+      -- The logo is the community Neovim wordmark from the alpha-nvim ecosystem —
+      -- the one typecraft uses in cpow/neovim-for-newbs (lua/plugins/alpha.lua).
+      -- Only the art is borrowed; this stays on snacks, no alpha-nvim involved.
+      -- It renders more steadily than the old ANSI Shadow art because it is
+      -- essentially ONE glyph, U+2588 FULL BLOCK, plus four Powerline slants
+      -- (U+E0B8/BA/BC/BE) for the bevelled terminals — whereas ANSI Shadow mixes
+      -- Block Elements with Box Drawing (═║╔╗╚╝), and a font lacking either set
+      -- pulls the missing half from a fallback face with different metrics, which
+      -- is what made the seams shimmer.
+      --
+      -- CIRCE below it is hand-drawn to match: same 5-row cap height, same solid
+      -- block texture, stem thickness 4 (the wordmark's is 5) so it reads as the
+      -- same typeface a size down. Pure U+2588, no Powerline glyphs needed.
+      -- The Powerline slants require a Nerd Font, which the container has.
       dashboard = {
         preset = {
           pick = function(cmd, opts)
             return LazyVim.pick(cmd, opts)()
           end,
-          header = [[
-███╗   ██╗██╗   ██╗██╗███╗   ███╗       ██████╗██╗██████╗  ██████╗███████╗
-████╗  ██║██║   ██║██║████╗ ████║      ██╔════╝██║██╔══██╗██╔════╝██╔════╝
-██╔██╗ ██║██║   ██║██║██╔████╔██║█████╗██║     ██║██████╔╝██║     █████╗
-██║╚██╗██║╚██╗ ██╔╝██║██║╚██╔╝██║╚════╝██║     ██║██╔══██╗██║     ██╔══╝
-██║ ╚████║ ╚████╔╝ ██║██║ ╚═╝ ██║      ╚██████╗██║██║  ██║╚██████╗███████╗
-╚═╝  ╚═══╝  ╚═══╝  ╚═╝╚═╝     ╚═╝       ╚═════╝╚═╝╚═╝  ╚═╝ ╚═════╝╚══════╝]],
+          header = padded({
+            "                                             ",
+            "      ████ ██████           █████      ██",
+            "     ███████████             █████ ",
+            "     █████████ ███████████████████ ███   ███████████",
+            "    █████████  ███    █████████████ █████ ██████████████",
+            "   █████████ ██████████ █████████ █████ █████ ████ █████",
+            " ███████████ ███    ███ █████████ █████ █████ ████ █████",
+            "██████  █████████████████████ ████ █████ █████ ████ ██████",
+            "",
+            "        ███████████ ████ ███████████   ███████████ ████████████",
+            "       ████         ████ ████    ████ ████         ████",
+            "       ████         ████ ███████████  ████         ████████",
+            "       ████         ████ ████    ████ ████         ████",
+            "        ███████████ ████ ████    ████  ███████████ ████████████",
+          }),
           keys = {
             { icon = " ", key = "f", desc = "Find File", action = ":lua Snacks.dashboard.pick('files')" },
             { icon = " ", key = "n", desc = "New File", action = ":ene | startinsert" },
