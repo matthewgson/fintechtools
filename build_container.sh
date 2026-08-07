@@ -189,6 +189,51 @@ purge_old_images() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Resolve "track latest" versions to concrete ones before building.
+#
+# The Dockerfile defaults NVIM_VERSION and CLAUDE_CODE_VERSION to `latest` and
+# can resolve that itself, but doing it HERE buys two things a bare `latest`
+# cannot:
+#   * cache invalidation — a --build-arg that still reads `latest` is an
+#     unchanged build argument, so podman happily reuses the cached install layer
+#     and you silently keep last month's Neovim. Feeding in the concrete version
+#     changes the arg the moment upstream publishes, which is what forces the
+#     rebuild.
+#   * a record — the exact versions land in the build log and the summary below,
+#     so a container that misbehaves can be tied to what actually went into it.
+#
+# Both lookups are best-effort: on a network failure we fall back to the literal
+# `latest`, and the Dockerfile resolves it (correctly, just cache-permitting).
+# Override either by exporting NVIM_VERSION / CLAUDE_CODE_VERSION before running.
+# ─────────────────────────────────────────────────────────────────────────────
+BUILD_ARGS=()
+
+resolve_latest_versions() {
+  local nv cc
+
+  # GitHub's /releases/latest redirect resolves to the newest NON-prerelease tag,
+  # so this tracks stable and never a nightly. -w %{url_effective} avoids needing
+  # a token or jq (the API endpoint is rate-limited for unauthenticated callers).
+  nv="${NVIM_VERSION:-}"
+  if [ -z "$nv" ]; then
+    nv=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+           https://github.com/neovim/neovim/releases/latest 2>/dev/null \
+         | sed -n 's#.*/tag/##p')
+    [ -n "$nv" ] || { print_warning "Could not resolve latest Neovim — leaving it to the Dockerfile"; nv="latest"; }
+  fi
+
+  cc="${CLAUDE_CODE_VERSION:-}"
+  if [ -z "$cc" ]; then
+    cc=$(npm view @anthropic-ai/claude-code version 2>/dev/null | tr -d '[:space:]')
+    [ -n "$cc" ] || { print_warning "Could not resolve latest claude-code — leaving it to the Dockerfile"; cc="latest"; }
+  fi
+
+  NVIM_RESOLVED="$nv"; CLAUDE_CODE_RESOLVED="$cc"
+  BUILD_ARGS=( --build-arg "NVIM_VERSION=${nv}" --build-arg "CLAUDE_CODE_VERSION=${cc}" )
+  print_status "Tracking latest → Neovim ${nv}, claude-code ${cc}"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # SSH connection multiplexer
 
 setup_ssh_mux() {
@@ -274,12 +319,15 @@ main() {
   print_status "Step 1: Cleaning old images and building with Podman..."
   purge_old_images
 
-  echo "Command: podman build --platform linux/amd64 -t ${IMAGE_NAME}:${VERSION} ."
+  resolve_latest_versions
+
+  echo "Command: podman build --platform linux/amd64 -t ${IMAGE_NAME}:${VERSION} ${BUILD_ARGS[*]} ."
   start_timer
 
-  if podman build --platform linux/amd64 -t "${IMAGE_NAME}:${VERSION}" .; then
+  if podman build --platform linux/amd64 -t "${IMAGE_NAME}:${VERSION}" "${BUILD_ARGS[@]}" .; then
     end_timer "Docker image build"
-    send_pushover_notification "✅ Docker Build Complete" "FinTech Tools Docker image built successfully (${IMAGE_NAME}:${VERSION})"
+    print_success "✓ Built with Neovim ${NVIM_RESOLVED}, claude-code ${CLAUDE_CODE_RESOLVED}"
+    send_pushover_notification "✅ Docker Build Complete" "FinTech Tools built (${IMAGE_NAME}:${VERSION}) — nvim ${NVIM_RESOLVED}, claude-code ${CLAUDE_CODE_RESOLVED}"
   else
     print_error "Failed to build Docker image"
     send_pushover_notification "❌ Build Failed" "Docker image build failed. Check logs for details."

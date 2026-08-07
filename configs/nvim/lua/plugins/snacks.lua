@@ -60,10 +60,12 @@ return {
       -- pulls the missing half from a fallback face with different metrics, which
       -- is what made the seams shimmer.
       --
-      -- CIRCE below it is hand-drawn to match: same 5-row cap height, same solid
-      -- block texture, stem thickness 4 (the wordmark's is 5) so it reads as the
-      -- same typeface a size down. Pure U+2588, no Powerline glyphs needed.
-      -- The Powerline slants require a Nerd Font, which the container has.
+      -- CIRCE underneath is deliberately PLAIN spaced caps, not a second piece of
+      -- block art. A matching block wordmark was tried and looked wrong beside the
+      -- logo, so the quiet version won: it reads as a caption instead of competing
+      -- with the mark, and being pure ASCII it cannot pull a fallback face of its
+      -- own. The Powerline slants in the logo do need a Nerd Font, which both the
+      -- container and the Mac have.
       dashboard = {
         preset = {
           pick = function(cmd, opts)
@@ -79,11 +81,7 @@ return {
             " ███████████ ███    ███ █████████ █████ █████ ████ █████",
             "██████  █████████████████████ ████ █████ █████ ████ ██████",
             "",
-            "        ███████████ ████ ███████████   ███████████ ████████████",
-            "       ████         ████ ████    ████ ████         ████",
-            "       ████         ████ ███████████  ████         ████████",
-            "       ████         ████ ████    ████ ████         ████",
-            "        ███████████ ████ ████    ████  ███████████ ████████████",
+            "                            C  I  R  C  E",
           }),
           keys = {
             { icon = " ", key = "f", desc = "Find File", action = ":lua Snacks.dashboard.pick('files')" },

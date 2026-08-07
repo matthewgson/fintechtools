@@ -59,7 +59,19 @@ LABEL version="0.8"
 ARG UV_VERSION=0.11.21
 ARG QUARTO_VERSION=1.9.38
 ARG TINYTEX_TAG=v2026.06
-ARG NVIM_VERSION=v0.12.4
+# Neovim and Claude Code track the LATEST release on every build (see Stage 6 and
+# Stage 11). build_container.sh resolves `latest` to the concrete version before
+# calling podman and passes it back in as a --build-arg — that is what makes the
+# layer cache invalidate when upstream publishes, and what puts the exact version
+# in the build log. Building the Dockerfile directly, with no --build-arg, still
+# gets the newest release; it just may reuse a cached layer.
+# Pin either one by passing e.g. --build-arg NVIM_VERSION=v0.12.4.
+#
+# Tracking latest is also what VimTeX wants: it supports only the CURRENT stable
+# Neovim, and a lagging pin is exactly what broke .tex highlighting before
+# (see configs/nvim/lua/plugins/vimtex.lua).
+ARG NVIM_VERSION=latest
+ARG CLAUDE_CODE_VERSION=latest
 ARG LAZYGIT_VERSION=0.62.2
 ARG YAZI_VERSION=v26.5.6
 ARG RESVG_VERSION=0.47.0
@@ -399,13 +411,22 @@ RUN BOOKOKRAT_VERSION=${BOOKOKRAT_VERSION} && \
     rm -rf /tmp/bookokrat.tar.gz /tmp/bookokrat-x && \
     /usr/local/bin/bookokrat --version
 
-# ─── Stage 6: Neovim (pinned stable binary, x86_64) ─────────────────────────
-RUN NVIM_VERSION=${NVIM_VERSION} && \
-    echo "Installing Neovim ${NVIM_VERSION}" && \
-    curl -L "https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/nvim-linux-x86_64.tar.gz" \
-        -o /tmp/nvim.tar.gz && \
+# ─── Stage 6: Neovim (latest stable release binary, x86_64) ─────────────────
+# NVIM_VERSION=latest (the default) resolves through GitHub's /releases/latest
+# redirect, which points at the newest NON-prerelease tag — so this never picks up
+# a nightly. A concrete tag (v0.12.4) is fetched directly instead.
+# `curl -f` so an unknown tag fails the build loudly rather than taring up a 404
+# page, and the installed version is echoed for the build log.
+RUN if [ "${NVIM_VERSION}" = "latest" ]; then \
+        NVIM_URL="https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz"; \
+    else \
+        NVIM_URL="https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/nvim-linux-x86_64.tar.gz"; \
+    fi && \
+    echo "Installing Neovim ${NVIM_VERSION} from ${NVIM_URL}" && \
+    curl -fL "${NVIM_URL}" -o /tmp/nvim.tar.gz && \
     tar -C /usr/local --strip-components=1 -xzf /tmp/nvim.tar.gz && \
-    rm /tmp/nvim.tar.gz
+    rm /tmp/nvim.tar.gz && \
+    /usr/local/bin/nvim --version | head -1
 
 # ─── Stage 7: lazygit (LazyVim git UI) ──────────────────────────────────────
 RUN LAZYGIT_VERSION=${LAZYGIT_VERSION} && \
@@ -578,8 +599,9 @@ RUN mkdir -p -m 755 /etc/apt/keyrings && \
 #
 # The standalone GitHub Copilot CLI (@github/copilot) is intentionally NOT
 # installed — run it locally if you need it.
-RUN npm install -g @anthropic-ai/claude-code @github/copilot-language-server tree-sitter-cli \
-        claude-auto-retry
+RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+        @github/copilot-language-server tree-sitter-cli claude-auto-retry && \
+    echo "claude-code $(claude --version)"
 
 # ─── Stage 11a: claude-auto-retry shell wrapper — NOT via its own installer ───
 # `claude-auto-retry install` does two things: verify tmux, then inject a `claude()`
