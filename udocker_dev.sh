@@ -88,6 +88,27 @@ if _need_setup; then
     if _need_setup; then   # re-check under the lock
         err "udocker setup on $(hostname -s) (install + import + create + F3; tar=$FINTECH_TAR) ..."
         udocker install 1>&2 || { err "udocker install (tools) failed"; exit 1; }
+        # ── heal a HALF-REAPED udocker tools tree ────────────────────────────
+        # The tools live under $UDOCKER_DIR on /tmp, and CIRCE age-prunes /tmp by
+        # ATIME (the same reaper that guts the nvim plugin store — see the nvim()
+        # wrapper in .zshrc). Everything the runtime touches on each launch keeps
+        # its atime fresh and survives; everything used only at SETUP time does
+        # not. Observed 2026-08-10: bin/ and doc/ emptied completely and lib/ was
+        # down to the ONE libfakechroot the running container had loaded, out of
+        # ~100. The next setup then died with "Error: patchelf executable not
+        # found" -> "F3 setup failed".
+        #
+        # Plain `udocker install` cannot recover from this: it finds the surviving
+        # lib/VERSION, decides the tools are present, and no-ops. Only --force
+        # re-extracts. So check for the binary F3 actually needs and force a
+        # reinstall when it's gone. Cheap: this runs only on the setup path, which
+        # is already the slow once-per-node branch.
+        _patchelf="$UDOCKER_DIR/bin/patchelf-$(uname -m)"
+        if [ ! -x "$_patchelf" ]; then
+            err "udocker tools incomplete (no $(basename "$_patchelf")) — /tmp reaper; forcing reinstall"
+            udocker install --force 1>&2 || { err "udocker install --force failed"; exit 1; }
+            [ -x "$_patchelf" ] || { err "patchelf still missing after --force"; exit 1; }
+        fi
         udocker rm  "$UDOCKER_CONTAINER" >/dev/null 2>&1 || true   # clean partial state
         udocker rmi "$UDOCKER_IMAGE"      >/dev/null 2>&1 || true
         udocker import "$FINTECH_TAR" "$UDOCKER_IMAGE" 1>&2 || { err "import failed"; exit 1; }
