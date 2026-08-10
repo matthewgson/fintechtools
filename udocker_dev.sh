@@ -167,6 +167,22 @@ touch -a "$UDOCKER_DIR"/bin/* "$UDOCKER_DIR"/lib/* 2>/dev/null || true
 [ -n "$_root" ] && touch -a "${_root%/ROOT}"/execmode "${_root%/ROOT}"/container.json \
     "${_root%/ROOT}"/ld.so.orig "${_root%/ROOT}"/ld.lib.dirs "${_root%/ROOT}"/ld.so.path 2>/dev/null || true
 
+# ── ...and off the nvim plugin store ─────────────────────────────────────────
+# Same reaper, different victim. ~/.local/share/nvim is symlinked onto node-local
+# /tmp for startup speed, so the COLD plugin source files age out while each
+# plugin's compact .git survives — LazyVim then believes the plugin is installed
+# and require() fails ("No specs found for module lazyvim.plugins"). .zshrc's
+# _nvim_heal repairs that after the fact via `git checkout -f`; this prevents it
+# happening at all, which is the cheaper half of the deal. Covers mason's LSP
+# binaries in the same sweep — they are just as cold and just as reapable.
+#
+# Measured 10,421 files in 0.115s on mdc-1057-13-13, so it runs synchronously
+# rather than backgrounded; once per session is ample against a 30-day window.
+# GNU find is on the HOST here (this runs before the container starts), so the
+# `-exec ... +` batching is safe.
+_nvim_store="$_NODE_SCRATCH/.local/share/nvim"
+[ -d "$_nvim_store" ] && find "$_nvim_store" -type f -exec touch -a {} + 2>/dev/null || true
+
 # Defensive hook: if a glibc-2.39-matched libfakechroot is ever dropped at
 # /opt/fakechroot/lib (would silence the "OS might not be supported" warning and
 # fix NSS/uid resolution), use it. None currently exists — the udocker fakechroot
