@@ -179,13 +179,15 @@ purge_old_images() {
         print_success "✓ Removed image ${id}" || true
     done
   fi
-  local dangling
-  dangling=$(podman images -f dangling=true -q 2>/dev/null)
-  if [ -n "$dangling" ]; then
-    print_status "Pruning dangling intermediate layers..."
-    podman image prune -f >/dev/null 2>&1 && \
-      print_success "✓ Dangling layers pruned" || true
-  fi
+  # Deliberately NOT pruning dangling layers here. Those untagged layers ARE the
+  # build cache: with --layers (podman's default) every RUN is committed as its
+  # own layer, and a later build reuses them for every step whose instruction and
+  # inputs are unchanged. Pruning pre-build threw that away on every run, so a
+  # build that died at stage 11 — as one did on 2026-08-10, on disk — restarted
+  # from apt/R/TinyTeX instead of resuming near the end. Removing the TAGGED
+  # image above is enough to avoid confusion; its layers stay behind untagged and
+  # still serve as cache. They are reclaimed by prune_build_cache() once a build
+  # has actually succeeded.
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -345,6 +347,12 @@ main() {
 
   # Post-export: remove the image and prune dangling layers so podman storage
   # returns to baseline. Only the rootfs tar is needed going forward.
+  #
+  # This is the ONLY place the cache is dropped, and it is reached only once the
+  # rootfs tar exists. purge_old_images() deliberately leaves dangling layers
+  # alone before a build so a failed attempt can resume from where it died
+  # instead of restarting at apt/R/TinyTeX. Keep that pairing: prune on success
+  # here, never pre-build.
   print_status "Cleaning up: removing built image to free disk space..."
   podman image rm -f "localhost/${IMAGE_NAME}:${VERSION}" 2>/dev/null && \
     print_success "✓ Built image removed" || true

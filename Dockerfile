@@ -599,9 +599,18 @@ RUN mkdir -p -m 755 /etc/apt/keyrings && \
 #
 # The standalone GitHub Copilot CLI (@github/copilot) is intentionally NOT
 # installed — run it locally if you need it.
+# Do NOT run `claude --version` here to log the version. Claude Code ships as a
+# Bun-compiled binary, and this image is built --platform linux/amd64 on an
+# arm64 Mac, so every RUN executes under QEMU emulation — where Bun segfaults:
+#   panic(main thread): Segmentation fault at address 0x492492492497D1
+#   qemu: uncaught target signal 11 (Segmentation fault) - core dumped
+# It doesn't fail the build (the echo around it still exits 0) but it dumps core
+# and prints an alarming crash report mid-build. Ask npm instead: it reads the
+# installed package metadata without executing the binary. Native binaries like
+# nvim are fine under emulation — this is specific to Bun.
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
         @github/copilot-language-server tree-sitter-cli claude-auto-retry && \
-    echo "claude-code $(claude --version)"
+    npm ls -g --depth=0 @anthropic-ai/claude-code claude-auto-retry || true
 
 # ─── Stage 11a: claude-auto-retry shell wrapper — NOT via its own installer ───
 # `claude-auto-retry install` does two things: verify tmux, then inject a `claude()`
