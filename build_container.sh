@@ -436,6 +436,18 @@ collect_transfer_decisions() {
   echo "============================================================"
   echo
 
+  # Non-interactive mode (-y). The reads below are bound to /dev/tty so that a
+  # backgrounded or piped build cannot answer them; -y is the supported way to
+  # run unattended. Defaults to doing BOTH deployment steps, which is the whole
+  # point of the one-shot workflow; --no-transfer / --no-sync opt out.
+  if [ "${ASSUME_YES:-0}" -eq 1 ]; then
+    XFER_ROOTFS="${ASSUME_XFER:-1}"
+    SYNC_CONFIGS="${ASSUME_SYNC:-1}"
+    print_status "Non-interactive (-y): transfer=${XFER_ROOTFS} sync_configs=${SYNC_CONFIGS}"
+    echo "============================================================"
+    return 0
+  fi
+
   # ── rootfs tar ───────────────────────────────────────────────────────────────
   XFER_ROOTFS=0
   read -r -p "Transfer rootfs tar to CIRCE ${REMOTE_ROOTFS_PATH} after build? (y/N): " _r </dev/tty; echo
@@ -536,6 +548,11 @@ usage() {
   echo "Options:"
   echo "  -h, --help     Show this help message"
   echo "  -v, --version  Set version tag (default: ${VERSION})"
+  echo "  -y, --yes      Non-interactive: transfer the rootfs tar AND sync configs"
+  echo "                 (the prompts read from /dev/tty, so they cannot be piped;"
+  echo "                  use this to run the whole thing unattended)"
+  echo "      --no-transfer  With -y: build and export only, skip the CIRCE transfer"
+  echo "      --no-sync      With -y: skip ./sync_configs.sh at the end"
   echo
   echo "System Requirements:"
   echo "  - macOS with Podman installed and running (no apptainer/toolbox needed)"
@@ -555,6 +572,20 @@ while [[ $# -gt 0 ]]; do
   -v | --version)
     VERSION="$2"
     shift 2
+    ;;
+  -y | --yes)
+    ASSUME_YES=1
+    shift
+    ;;
+  --no-transfer)
+    ASSUME_YES=1
+    ASSUME_XFER=0
+    shift
+    ;;
+  --no-sync)
+    ASSUME_YES=1
+    ASSUME_SYNC=0
+    shift
     ;;
   *)
     print_error "Unknown option: $1"
