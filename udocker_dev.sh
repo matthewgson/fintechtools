@@ -71,20 +71,50 @@ mkdir -p "$UDOCKER_DIR" || exit 1
 
 # ── per-node setup: install tools + import + create + F3 (gated + flock) ──────
 # /tmp is wiped per allocation, so the container is rebuilt per node (import-copy
-# + extract + patchelf). Gated on a marker written only after F3 completes; flock
-# serializes a batch pre-warm against an eager connect. F3 patchelf's the binaries
-# to absolute container paths, so it must be redone per node (udocker F-mode
-# containers aren't portable across hosts).
-F3_READY="$UDOCKER_DIR/.f3-ready"
-# Re-run setup when the marker is missing OR the rootfs tar is newer than it: a
-# rebuilt image must replace this node's container, else a new tar wouldn't be
-# picked up until /tmp is wiped. The setup below rm's any existing container/image
-# first, so this is also the auto-update path after build_container.sh ships a new tar.
-_need_setup() { [ ! -e "$F3_READY" ] || [ "$FINTECH_TAR" -nt "$F3_READY" ]; }
+# + extract + patchelf); flock serializes a batch pre-warm against an eager
+# connect. F3 patchelf's the binaries to absolute container paths, so it must be
+# redone per node (udocker F-mode containers aren't portable across hosts).
+#
+# Setup is gated on udocker's OWN state, not on a marker file we write. The old
+# gate keyed on $UDOCKER_DIR/.f3-ready, which was written once and never read
+# again — so the atime reaper below eventually pruned it, and its absence forced
+# a full teardown + 4.9 GB re-import + F3 patch on a container that was perfectly
+# good. Everything checked here is state udocker maintains for its own purposes,
+# so there is nothing extra to keep alive.
+#
+# `udocker inspect` costs a python start (~0.5 s), so resolve the ROOT ONCE here
+# and reuse it below; the warm path pays exactly one inspect, as it always did.
+_root="$(udocker inspect -p "$UDOCKER_CONTAINER" 2>/dev/null || true)"
+
+_container_ready() {
+    [ -n "$_root" ] && [ -d "$_root" ] || return 1
+    local cdir="${_root%/ROOT}"
+    # `udocker setup --execmode=F3` records the mode here, and only writes
+    # ld.so.orig (the saved original loader) once the patch has actually run —
+    # together they distinguish a finished container from a half-built one.
+    [ "$(cat "$cdir/execmode" 2>/dev/null)" = "F3" ] || return 1
+    [ -s "$cdir/ld.so.orig" ] || return 1
+    # Cheap spot-check that the ROOT itself hasn't been gutted. Deliberately not
+    # exhaustive — a full 4.5 GB verify per launch would cost far more than the
+    # re-setup it avoids.
+    [ -x "$_root/bin/zsh" ] && [ -x "$_root/usr/bin/git" ] || return 1
+    # Stale if the rootfs tar was rebuilt after this container was created:
+    # container.json is written by `udocker create`, so it dates the container.
+    # This is the auto-update path after build_container.sh ships a new tar.
+    # Compares MTIMEs, which is why the reaper defence below uses `touch -a`.
+    ! [ "$FINTECH_TAR" -nt "$cdir/container.json" ]
+}
+_need_setup() { ! _container_ready; }
+
 if _need_setup; then
     [ -f "$FINTECH_TAR" ] || { err "rootfs tarball not found at $FINTECH_TAR"; exit 1; }
     exec 9>"$UDOCKER_DIR/.setup.lock"
     command -v flock >/dev/null 2>&1 && flock 9
+    # Re-resolve before re-checking: whoever held the lock may have just built a
+    # container under a NEW id, which our pre-lock $_root knows nothing about.
+    # Without this the re-check inspects the old id, fails, and we rebuild the
+    # container that was just built — exactly what the lock exists to prevent.
+    _root="$(udocker inspect -p "$UDOCKER_CONTAINER" 2>/dev/null || true)"
     if _need_setup; then   # re-check under the lock
         err "udocker setup on $(hostname -s) (install + import + create + F3; tar=$FINTECH_TAR) ..."
         udocker install 1>&2 || { err "udocker install (tools) failed"; exit 1; }
@@ -114,14 +144,28 @@ if _need_setup; then
         udocker import "$FINTECH_TAR" "$UDOCKER_IMAGE" 1>&2 || { err "import failed"; exit 1; }
         udocker create --name="$UDOCKER_CONTAINER" "$UDOCKER_IMAGE" 1>&2 || { err "create failed"; exit 1; }
         udocker setup --execmode=F3 "$UDOCKER_CONTAINER" 1>&2 || { err "F3 setup failed"; exit 1; }
-        : > "$F3_READY"
         err "udocker setup complete."
     fi
     exec 9>&-
+    # The container was recreated under a new id — re-resolve the ROOT.
+    _root="$(udocker inspect -p "$UDOCKER_CONTAINER" 2>/dev/null || true)"
 fi
 
-# Resolve the container ROOT (host path) for the fakechroot-lib hint + slurm dirs.
-_root="$(udocker inspect -p "$UDOCKER_CONTAINER" 2>/dev/null || true)"
+# ── keep the /tmp reaper off the setup-only files ────────────────────────────
+# /tmp is mounted relatime and CIRCE prunes it by ATIME: files the runtime opens
+# on every launch stay fresh and survive, files touched only during setup age out.
+# That is how bin/ lost patchelf entirely and lib/ went from ~185 entries to the
+# single libfakechroot the running container had loaded (2026-08-10) — which then
+# made the next setup fail outright with "patchelf executable not found".
+#
+# These are a few hundred small files; refreshing their atime costs milliseconds
+# and keeps a future re-setup able to run at all. `-a` so ONLY atime moves —
+# container.json's mtime is the staleness signal in _container_ready above, and
+# bumping it would make a newly shipped tar look older than the container and
+# never get picked up.
+touch -a "$UDOCKER_DIR"/bin/* "$UDOCKER_DIR"/lib/* 2>/dev/null || true
+[ -n "$_root" ] && touch -a "${_root%/ROOT}"/execmode "${_root%/ROOT}"/container.json \
+    "${_root%/ROOT}"/ld.so.orig "${_root%/ROOT}"/ld.lib.dirs "${_root%/ROOT}"/ld.so.path 2>/dev/null || true
 
 # Defensive hook: if a glibc-2.39-matched libfakechroot is ever dropped at
 # /opt/fakechroot/lib (would silence the "OS might not be supported" warning and
