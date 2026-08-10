@@ -516,9 +516,19 @@ execute_all_transfers() {
     print_status "step). To force it on a busy node: rm -rf /tmp/\$USER/.udocker"
     # Offer to remove the local tar — it's large (~10 GB) and no longer needed
     # after a successful transfer. The next build overwrites it anyway.
-    local _tar_size
+    local _tar_size _del
     _tar_size=$(du -sh "${ROOTFS_TAR}" 2>/dev/null | cut -f1)
-    read -r -p "Delete local rootfs tar ${ROOTFS_TAR} (${_tar_size}) to free space? (y/N): " _del </dev/tty; echo
+    if [ "${ASSUME_YES:-0}" -eq 1 ]; then
+      # Unattended: keep it. This read is also bound to /dev/tty, so before the
+      # guard it aborted the whole script with "/dev/tty: Device not configured"
+      # AFTER a successful transfer — losing the config sync that follows.
+      # Keeping is the interactive default too, and deleting 4.7 GB of the only
+      # local copy is not something to do without being asked.
+      print_status "Non-interactive (-y): keeping local rootfs tar ${ROOTFS_TAR} (${_tar_size})"
+      _del=n
+    else
+      read -r -p "Delete local rootfs tar ${ROOTFS_TAR} (${_tar_size}) to free space? (y/N): " _del </dev/tty; echo
+    fi
     if [[ $_del =~ ^[Yy]$ ]]; then
       rm -f "${ROOTFS_TAR}" && print_success "✓ Local rootfs tar deleted" || print_warning "Could not delete ${ROOTFS_TAR}"
     else
