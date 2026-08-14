@@ -84,6 +84,11 @@ ARG BOOKOKRAT_VERSION=v0.3.12
 # catppuccin/tmux = tmux status-bar theme, baked into the image and sourced
 # directly (no TPM at runtime). Pinned to match the Mac (which tracks "latest").
 ARG CATPPUCCIN_TMUX_VERSION=v2.3.0
+# Session persistence for tmux (prefix Ctrl-s save / Ctrl-r restore, plus a
+# 15-minute autosave). Baked like catppuccin and sourced directly from
+# configs/tmux/tmux.conf — no TPM. continuum drives resurrect, so both are needed.
+ARG TMUX_RESURRECT_VERSION=v4.0.0
+ARG TMUX_CONTINUUM_VERSION=v3.1.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/New_York
@@ -515,6 +520,27 @@ RUN CATPPUCCIN_TMUX_VERSION=${CATPPUCCIN_TMUX_VERSION} && \
     tar -C /usr/local/share/tmux-plugins/catppuccin --strip-components=1 -xzf /tmp/catppuccin-tmux.tar.gz && \
     rm /tmp/catppuccin-tmux.tar.gz && \
     { [ -f /usr/local/share/tmux-plugins/catppuccin/catppuccin.tmux ] || { echo "ERROR: catppuccin.tmux missing after extract" >&2; exit 1; }; }
+
+# ─── tmux session persistence: resurrect + continuum ────────────────────────
+# Same treatment as catppuccin: extracted to /usr/local/share/tmux-plugins and
+# sourced directly by configs/tmux/tmux.conf, so no TPM and no plugin clone on
+# the slow network home. continuum arms the autosave timer and delegates the
+# actual save/restore to resurrect, so both must be present or neither works.
+# Saved state still lives on $HOME (see @resurrect-dir in tmux.conf) — that is
+# deliberate, so a layout survives the compute node changing.
+RUN set -eu; \
+    for p in "tmux-resurrect:${TMUX_RESURRECT_VERSION}:resurrect.tmux" \
+             "tmux-continuum:${TMUX_CONTINUUM_VERSION}:continuum.tmux"; do \
+        name="${p%%:*}"; rest="${p#*:}"; ver="${rest%%:*}"; entry="${rest#*:}"; \
+        echo "Installing tmux-plugins/${name} ${ver}"; \
+        mkdir -p "/usr/local/share/tmux-plugins/${name}"; \
+        curl -fL "https://github.com/tmux-plugins/${name}/archive/refs/tags/${ver}.tar.gz" \
+            -o /tmp/tmux-plugin.tar.gz; \
+        tar -C "/usr/local/share/tmux-plugins/${name}" --strip-components=1 -xzf /tmp/tmux-plugin.tar.gz; \
+        rm /tmp/tmux-plugin.tar.gz; \
+        [ -f "/usr/local/share/tmux-plugins/${name}/${entry}" ] \
+            || { echo "ERROR: ${entry} missing after extract" >&2; exit 1; }; \
+    done
 
 # ─── Stage 8g: tmux built from source (newer than Ubuntu 24.04's apt 3.4) ────
 # Ubuntu 24.04 pins tmux 3.4, which predates modern terminals' CSI-u extended-key
