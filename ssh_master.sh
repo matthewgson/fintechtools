@@ -96,10 +96,21 @@ circe_ensure_master() {
   # Clear a dead master's leftovers first, or `ssh -MNf` hits "ControlSocket
   # already exists", silently disables multiplexing, and every later transfer
   # dials its own connection.
-  ssh -O exit "$CIRCE_ALIAS" 2>/dev/null
+  #
+  # Both lines below MUST NOT be allowed to fail the caller. sync_configs.sh and
+  # build_container.sh run under `set -e`, and neither of these is an error:
+  # `ssh -O exit` returns nonzero when there is no master to close (the normal
+  # case on a cold start), and the `[ -n ]` test returns nonzero when ssh -G
+  # reported no ControlPath. Without the guards the caller died HERE, silently,
+  # before reaching the dial or any of the error messages below — which is
+  # exactly what happened on 2026-08-14: `./sync_configs.sh` printed its local
+  # install line and then just stopped, with the real cause (VPN down, so the
+  # login node timed out) never shown. Unnoticed until now only because every
+  # earlier run found a live master and returned before reaching this point.
+  ssh -O exit "$CIRCE_ALIAS" 2>/dev/null || true
   local cp
   cp="$(circe_control_path)"
-  [ -n "$cp" ] && rm -f "$cp"
+  if [ -n "$cp" ]; then rm -f "$cp"; fi
 
   echo "Opening master connection to ${CIRCE_ALIAS} (one for this whole run)..."
   local err
