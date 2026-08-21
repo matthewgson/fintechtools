@@ -23,6 +23,15 @@ bug in whichever tool needed the cold half:
 | zsh completion functions | `.zwc` digests | wall of text at every shell start |
 | nvim `lazy/` sources | each plugin's `.git` | LazyVim `module not found` cascade |
 | udocker `bin/`, `lib/` | the loaded `libfakechroot` | `patchelf executable not found` |
+| **nvim's own runtime** (`/usr/local/share/nvim/runtime`) | `lua/vim/{lsp,uri,glob,re}` — what an LSP session opens | `no file './vim.so'` traceback from lazy.nvim, `E216: No such group or event: filetypedetect`. **Looks like a LazyVim/plugin bug; the plugin store is fine** |
+| R `site-library` | nothing — went to 1 of 43 packages | nvim's R LSP dies, no visible connection to R |
+
+Confirmed on 2026-08-21: after the python restore, nvim still failed — **because
+the reaped tree was nvim's runtime inside the ROOT, not the plugin store**. The
+plugin store (`~/.local/share/nvim/lazy`, 47 repos, 0 deleted files) had been
+swept since June and was pristine; `/usr/local/share/nvim/runtime` had 4 of ~40
+`lua/vim/*.lua` and 17 of 775 `syntax/*.vim`. Restoring it took 0.4s. Always
+check **which** tree is missing files before blaming the tool that reported it.
 
 Diagnosis: **count** entries in the suspect directory (a reap eats from the cold
 end, so a surviving `__init__.py` proves nothing), and check the ROOT's age

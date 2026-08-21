@@ -21,6 +21,8 @@ seam**, presenting as a bug in whatever tool needed the cold half.
 | zsh completion functions | the `.zwc` digests (autoloaded) | wall of text (`compinit`/`compdump` bodies) at every shell start |
 | nvim `lazy/` plugin sources | each plugin's compact `.git` | LazyVim `module not found` cascade |
 | udocker `bin/`, `lib/` | the one loaded `libfakechroot` | `patchelf executable not found` at setup |
+| **nvim's own runtime** (`/usr/local/share/nvim/runtime`) | `lua/vim/{lsp,uri,glob,re}` — what an LSP session opens | `no file './vim.so'` traceback from lazy.nvim, `E216: No such group or event: filetypedetect`. **Looks like a LazyVim/plugin bug; the plugin store is fine** |
+| R `site-library` | nothing — went to 1 of 43 packages | nvim's R LSP dies, no visible connection to R |
 | (next one) | whatever it opens per launch | some tool insisting a file it shipped with is missing |
 
 ### Recognising it

@@ -181,7 +181,11 @@ touch -a "$UDOCKER_DIR"/bin/* "$UDOCKER_DIR"/lib/* 2>/dev/null || true
 # GNU find is on the HOST here (this runs before the container starts), so the
 # `-exec ... +` batching is safe.
 _nvim_store="$_NODE_SCRATCH/.local/share/nvim"
-[ -d "$_nvim_store" ] && find "$_nvim_store" -type f -exec touch -a {} + 2>/dev/null || true
+# Excludes lazy/.reap-sentinel by name: _nvim_heal in .zshrc detects a reap by
+# that file being the COLDEST thing in the store, and sweeping it along with
+# everything else would keep it fresh forever and neuter the detector.
+[ -d "$_nvim_store" ] && find "$_nvim_store" -type f ! -name '.reap-sentinel' \
+    -exec touch -a {} + 2>/dev/null || true
 
 # ── ...and off everything else in the ROOT: repair, then prevent ─────────────
 # The two sweeps above cover the paths whose loss we have already been bitten
@@ -215,10 +219,25 @@ _REAP_GUARDS=(
     "usr/lib/python3.12|*.py|100|usr/lib/python3.12"
     "usr/share/zsh/functions/Completion/Unix|_*|40|usr/share/zsh/functions"
     "usr/lib/node_modules/npm/lib|*.js|5|usr/lib/node_modules"
+    # nvim's OWN runtime, not the plugin store — reaped on this node by
+    # 2026-08-21 while lazy/ (swept since June) was untouched, so LazyVim looked
+    # broken when the missing files were vim.health/filetype.lua/syntax/*.vim.
+    # Symptom: "no file './vim.so'" tracebacks out of lazy.nvim + "E216: No such
+    # group or event: filetypedetect". Survivors were lua/vim/{lsp,uri,glob,re},
+    # i.e. exactly what an LSP session opens.
+    "usr/local/share/nvim/runtime/lua/vim|*.lua|20|usr/local/share/nvim"
+    "usr/local/share/nvim/runtime/syntax|*.vim|200|usr/local/share/nvim"
+    "usr/local/share/nvim/runtime/ftplugin|*.vim|100|usr/local/share/nvim"
+    # R's system library — holds `languageserver`, so a reap here kills nvim's R
+    # LSP with no obvious connection to R. Was down to 1 of 43 packages.
+    "usr/local/lib/R/site-library|*|20|usr/local/lib/R/site-library"
+    # TinyTeX: thousands of .sty/.cls that only a compile ever opens.
+    "opt/TinyTeX/texmf-dist/tex/latex|*|100|opt/TinyTeX"
 )
 
-# Cost on a healthy ROOT: one `find -maxdepth 1 | head` per row — seven
-# directory reads that stop early, ~0.1s, and flat in the size of the ROOT.
+# Cost on a healthy ROOT: one `find -maxdepth 1 | head` per row — a dozen
+# directory reads that stop early, ~0.02s, and flat in the size of the ROOT.
+# Counts entries, not just files: R packages and TinyTeX bundles are directories.
 _reap_repair() {
     [ -n "$_root" ] || return 0
     local g dir glob min sub n hit=0
@@ -226,7 +245,7 @@ _reap_repair() {
     for g in "${_REAP_GUARDS[@]}"; do
         IFS='|' read -r dir glob min sub <<< "$g"
         [ -d "$_root/$dir" ] || continue       # absent from this image — not ours
-        n=$(find "$_root/$dir" -maxdepth 1 -name "$glob" -type f 2>/dev/null \
+        n=$(find "$_root/$dir" -mindepth 1 -maxdepth 1 -name "$glob" 2>/dev/null \
             | head -n "$((min + 1))" | wc -l | tr -d ' ')
         [ "$n" -ge "$min" ] && continue
         err "/tmp reaper: $dir/$glob has $n files, expected >= $min"
