@@ -34,6 +34,33 @@ if command -v fzf >/dev/null 2>&1; then
   eval "$(fzf --zsh)"
 fi
 
+# === DNS proxy for static binaries (container only) ==========================
+# Compute-node DNS refuses external names (2026-08). Dynamic binaries are fixed
+# by the container resolv.conf + node shim (see udocker_dev.sh), but STATIC
+# binaries — claude.exe (Bun) above all — bypass libfakechroot and read the
+# HOST resolv.conf, so they still die (claude TUI: "ENOTIMP"). They do honor
+# proxy env vars though, and a proxy needs no DNS to reach (127.0.0.1). So in
+# the container, start the launcher-generated CONNECT proxy once per node and
+# route external traffic through it. NO_PROXY keeps localhost + USF internal
+# addresses direct. Guarded on container_uuid: this same .zshrc also runs on
+# the CIRCE login node, where DNS is fine and no proxy should exist.
+if [ -n "${container_uuid:-}" ] && [ -f "$HOME/.local/lib/dns-proxy.cjs" ]; then
+  _dnsproxy_port=18373
+  if ! { exec 3<>"/dev/tcp/127.0.0.1/${_dnsproxy_port}"; } 2>/dev/null; then
+    nohup node "$HOME/.local/lib/dns-proxy.cjs" \
+      >> "/tmp/${USER}/dns-proxy.log" 2>&1 &!
+    sleep 0.3
+  else
+    exec 3>&- 3<&-
+  fi
+  export HTTPS_PROXY="http://127.0.0.1:${_dnsproxy_port}"
+  export HTTP_PROXY="http://127.0.0.1:${_dnsproxy_port}"
+  export https_proxy="$HTTPS_PROXY" http_proxy="$HTTP_PROXY"
+  export NO_PROXY="localhost,127.0.0.1,::1,.usf.edu"
+  export no_proxy="$NO_PROXY"
+  unset _dnsproxy_port
+fi
+
 # === Persistent tmux in one command ==========================================
 # tmux replaced zellij here: a fresh tmux session creates in ~0.03s even under
 # proot, where a fresh zellij create cost ~1.3-1.5s (its WASM plugin runtime +

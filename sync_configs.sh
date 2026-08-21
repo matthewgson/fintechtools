@@ -55,7 +55,7 @@ echo "========================================="
 echo
 
 # ── Discover what exists ──────────────────────────────────────────────────────
-CONFIG_LIST=(avante.nvim github-copilot btm nvim yazi tmux bookokrat starship git)
+CONFIG_LIST=(avante.nvim github-copilot bottom nvim yazi tmux bookokrat starship git)
 CONFIGS_DIR="${SCRIPT_DIR}/configs"
 
 # LazyVim extras to DROP from the container's nvim config only. The nvim sync is
@@ -72,6 +72,7 @@ HAVE_ZSHRC=0;    [ -f "${SCRIPT_DIR}/.zshrc" ]              && HAVE_ZSHRC=1
 HAVE_IGNORE=0;   [ -f "${SCRIPT_DIR}/.ignore" ]             && HAVE_IGNORE=1
 HAVE_TERM=0;     [ -f "${SCRIPT_DIR}/term_session.sh" ]     && HAVE_TERM=1
 HAVE_UDOCKER=0;  [ -f "${SCRIPT_DIR}/udocker_dev.sh" ]      && HAVE_UDOCKER=1
+HAVE_CLAUDEMD=0; [ -f "${SCRIPT_DIR}/configs/claude/CLAUDE.md" ] && HAVE_CLAUDEMD=1
 HAVE_CONNECT=0;  [ -f "${SCRIPT_DIR}/connect_nvim.sh" ]     && HAVE_CONNECT=1
 # bookokrat synctex wrappers → ~/.local/bin (on PATH inside the container).
 # Source the LIVE copies from ~/.local/bin (where they're edited and used) so
@@ -88,6 +89,7 @@ echo "  • ~/.config/{$(IFS=,; echo "${CONFIG_LIST[*]}")} → CIRCE"
 [ "$HAVE_IGNORE"   -eq 1 ] && echo "  • .ignore → CIRCE ~/  (fd/ripgrep excludes)"
 [ "$HAVE_TERM"     -eq 1 ] && echo "  • term_session.sh → CIRCE ~/sh/"
 [ "$HAVE_UDOCKER"  -eq 1 ] && echo "  • udocker_dev.sh → CIRCE ~/bin/  (udocker/F3 launcher)"
+[ "$HAVE_CLAUDEMD" -eq 1 ] && echo "  • configs/claude/CLAUDE.md → CIRCE ~/.claude/CLAUDE.md  (container notes for Claude)"
 [ "$HAVE_BOOKOKRAT_SCRIPTS" -eq 1 ] && echo "  • bookokrat-{split,forward,inverse} → CIRCE ~/.local/bin/"
 [ "$HAVE_CONNECT"  -eq 1 ] && echo "  • connect_nvim.sh → ~/  (local)"
 echo
@@ -223,6 +225,23 @@ if [ "$HAVE_TERM" -eq 1 ]; then
   _staged+=("sh/term_session.sh")
 fi
 
+# Container operating notes for Claude Code. ~/.claude/CLAUDE.md is user-level
+# memory, so it loads in EVERY in-container session regardless of which project
+# directory Claude is started in — which is what makes the /tmp-reaper family
+# recognisable from inside a random analysis dir rather than only in this repo.
+if [ "$HAVE_CLAUDEMD" -eq 1 ]; then
+  # Don't silently eat a hand-written remote CLAUDE.md: ours carries a marker
+  # line, so anything without it predates this sync and gets set aside once.
+  if remote_ssh "[ -f ~/.claude/CLAUDE.md ] && ! grep -q 'synced from the .05_Container. repo' ~/.claude/CLAUDE.md" 2>/dev/null; then
+    remote_ssh "cp ~/.claude/CLAUDE.md ~/.claude/CLAUDE.md.pre-sync.bak" 2>/dev/null
+    print_warning "  CIRCE ~/.claude/CLAUDE.md was hand-written — saved as CLAUDE.md.pre-sync.bak"
+    print_warning "  Fold anything worth keeping into ${SCRIPT_DIR}/configs/claude/CLAUDE.md"
+  fi
+  mkdir -p "$STAGING/.claude"
+  cp "${SCRIPT_DIR}/configs/claude/CLAUDE.md" "$STAGING/.claude/CLAUDE.md"
+  _staged+=(".claude/CLAUDE.md")
+fi
+
 if [ "$HAVE_UDOCKER" -eq 1 ]; then
   mkdir -p "$STAGING/bin"
   cp "${SCRIPT_DIR}/udocker_dev.sh" "$STAGING/bin/udocker_dev.sh"
@@ -243,7 +262,7 @@ if [ "$HAVE_BOOKOKRAT_SCRIPTS" -eq 1 ]; then
 fi
 
 # Pre-create remote dirs
-remote_ssh "mkdir -p ~/.config ~/sh ~/bin ~/.local/bin" 2>/dev/null
+remote_ssh "mkdir -p ~/.config ~/sh ~/bin ~/.local/bin ~/.claude" 2>/dev/null
 
 # ONE rsync call for all remote files
 echo

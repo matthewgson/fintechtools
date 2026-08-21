@@ -183,6 +183,94 @@ touch -a "$UDOCKER_DIR"/bin/* "$UDOCKER_DIR"/lib/* 2>/dev/null || true
 _nvim_store="$_NODE_SCRATCH/.local/share/nvim"
 [ -d "$_nvim_store" ] && find "$_nvim_store" -type f -exec touch -a {} + 2>/dev/null || true
 
+# ── ...and off everything else in the ROOT: repair, then prevent ─────────────
+# The two sweeps above cover the paths whose loss we have already been bitten
+# by. The reaper does not respect that list: it takes whatever went cold, and
+# the ROOT is full of files no launch ever opens — the python stdlib's *.py
+# (CPython reads __pycache__/*.pyc and only stat()s the source, and stat does
+# not refresh atime), zsh's ~960 completion functions, TinyTeX, node_modules,
+# R's system library. Each surfaces as an impossible bug in whichever tool
+# needed the cold half of its own install; python dying with "no codec search
+# functions registered" (2026-08-21) was the worst of them, because it takes the
+# interpreter down before it can even report which module is missing.
+#
+# This runs on EVERY connect — connect_nvim.sh execs ~/bin/udocker_dev.sh on the
+# node each time, reattach included — and before the git-static / gh / DNS
+# blocks below, which read files out of the ROOT themselves.
+#
+# Two halves, in order of importance:
+#   PREVENT — the background `touch -a` over the whole ROOT. Nothing ever goes
+#             cold, so unguarded victims (TinyTeX, R, man pages) are covered
+#             too. This is the actual fix; connect at least every ~10 days and
+#             the reaper never reaches anything.
+#   REPAIR  — the guard table, for the window where you did NOT connect for ten
+#             days. Probes by file COUNT, because a reap eats a directory from
+#             the cold end and a surviving __init__.py proves nothing.
+# A new victim is one new row in _REAP_GUARDS, never a bespoke fix.
+_REAP_GUARDS=(
+    "usr/lib/python3.13/encodings|*.py|40|usr/lib/python3.13"
+    "usr/lib/python3.13/asyncio|*.py|20|usr/lib/python3.13"
+    "usr/lib/python3.13|*.py|100|usr/lib/python3.13"
+    "usr/lib/python3.12/encodings|*.py|40|usr/lib/python3.12"
+    "usr/lib/python3.12|*.py|100|usr/lib/python3.12"
+    "usr/share/zsh/functions/Completion/Unix|_*|40|usr/share/zsh/functions"
+    "usr/lib/node_modules/npm/lib|*.js|5|usr/lib/node_modules"
+)
+
+# Cost on a healthy ROOT: one `find -maxdepth 1 | head` per row — seven
+# directory reads that stop early, ~0.1s, and flat in the size of the ROOT.
+_reap_repair() {
+    [ -n "$_root" ] || return 0
+    local g dir glob min sub n hit=0
+    local -a damaged=()
+    for g in "${_REAP_GUARDS[@]}"; do
+        IFS='|' read -r dir glob min sub <<< "$g"
+        [ -d "$_root/$dir" ] || continue       # absent from this image — not ours
+        n=$(find "$_root/$dir" -maxdepth 1 -name "$glob" -type f 2>/dev/null \
+            | head -n "$((min + 1))" | wc -l | tr -d ' ')
+        [ "$n" -ge "$min" ] && continue
+        err "/tmp reaper: $dir/$glob has $n files, expected >= $min"
+        case " ${damaged[*]:-} " in *" $sub "*) ;; *) damaged+=("$sub") ;; esac
+        hit=1
+    done
+    [ "$hit" -eq 1 ] || return 0
+    if [ ! -f "$FINTECH_TAR" ]; then
+        err "/tmp reaper: rootfs tar missing at $FINTECH_TAR — cannot restore"
+        return 1
+    fi
+    for sub in "${damaged[@]}"; do
+        err "/tmp reaper: restoring $sub from the rootfs tar ..."
+        tar xf "$FINTECH_TAR" -C "$_root" "$sub" 2>/dev/null \
+            || err "/tmp reaper: restore of $sub FAILED (stale tar?)"
+    done
+}
+
+# Only atime moves (-a): container.json's mtime is the staleness signal for a
+# newly shipped tar in _container_ready above and must not be disturbed.
+# Backgrounded and rate-limited to 12h — a few seconds of find over a 4.5 GB
+# ROOT, against a ~10-day window, so no connect should ever wait on it. stdin
+# from /dev/null as well as stdout/stderr: connect_nvim.sh arrives over `ssh
+# -tt`, and a background child still holding the session fds keeps the SSH
+# channel from closing.
+_reap_sweep() {
+    [ -n "$_root" ] || return 0
+    local stamp="$_root/.atime-sweep-stamp"
+    [ -n "$(find "$stamp" -mmin -720 2>/dev/null)" ] && return 0
+    : > "$stamp"
+    nohup nice -n 19 find "$_root" -xdev -type f -exec touch -a {} + \
+        </dev/null >/dev/null 2>&1 &
+}
+
+_reap_repair
+_reap_sweep
+
+# `udocker_dev.sh --doctor` — check/repair the ROOT and exit, without starting a
+# container. For diagnosing from a node shell; a plain reconnect does the same.
+if [ "${1:-}" = "--doctor" ]; then
+    _reap_repair && err "ROOT $_root: reaper guards satisfied"
+    exit $?
+fi
+
 # Defensive hook: if a glibc-2.39-matched libfakechroot is ever dropped at
 # /opt/fakechroot/lib (would silence the "OS might not be supported" warning and
 # fix NSS/uid resolution), use it. None currently exists — the udocker fakechroot
@@ -270,6 +358,7 @@ if [ -n "$_root" ] && [ -d "$_root/opt/git-static" ]; then
        && grep -q 'Auto-generated by udocker_dev.sh' "$HOME/.local/bin/lazygit" 2>/dev/null; then
         rm -f "$HOME/.local/bin/lazygit"
     fi
+
     # lazygit wrapper, installed IN the container ROOT's /usr/local/bin — which
     # DOES win in PATH, so even nvim-launched lazygit hits it. It prepends the
     # static, host-runnable git for lazygit ONLY (lazygit's Go exec of `git`
@@ -460,9 +549,203 @@ VOLS=()
 for _v in "/tmp" "/run" "$HOME" "/work/g/$USER" "/work_bgfs/g/$USER" "/shares"; do
     [ -e "$_v" ] && VOLS+=( -v "$_v:$_v" )
 done
-for _f in /etc/resolv.conf /etc/hosts /etc/localtime; do
+for _f in /etc/localtime; do
     [ -e "$_f" ] && VOLS+=( -v "$_f:$_f" )
 done
+
+# ── DNS: container-only resolv.conf with a public-resolver fallback ───────────
+# 2026-08-19: the campus DNS server (131.247.250.68) REFUSES external names when
+# asked from compute-node subnets (login nodes still get answers), and UDP/53
+# egress is blocked — so inside the container getaddrinfo/c-ares died on every
+# external host (Claude Code: "Failed to connect to api.anthropic.com: ENOTIMP").
+# TCP/53 to public resolvers DOES get out (verified from mdc-1057-13-13), so the
+# container gets its own resolv.conf:
+#   - campus server stays FIRST: internal rc.usf.edu names keep resolving, and
+#     its REFUSED on external names makes glibc and c-ares fall through to the
+#     next server rather than give up;
+#   - public resolvers appended as that fallback;
+#   - `use-vc` forces TCP for all of it (glibc >=2.14 and node's c-ares both
+#     honor it), which is what routes around the UDP/53 block. `rotate` from the
+#     host file is deliberately NOT carried over — order matters here.
+# Written INTO the node-local container ROOT (udocker seeds ROOT/etc/resolv.conf
+# from the host at create; F3 ignores a file -v map whose source differs from the
+# container path — verified live, the bind form left the Puppet host copy in
+# place). The ROOT is rebuilt per node, so this is re-written on every launch.
+# The host's /etc/resolv.conf is untouched.
+if [ -n "$_root" ] && [ -d "$_root/etc" ]; then
+    {
+        grep -hE '^(search|domain)[[:space:]]' /etc/resolv.conf 2>/dev/null
+        echo "options use-vc timeout:2 attempts:2"
+        # Deliberately NO campus nameserver: c-ares does NOT fall through past
+        # its REFUSED (verified: campus-first => EREFUSED, public-only => OK).
+        echo "nameserver 8.8.8.8"
+        echo "nameserver 1.1.1.1"
+    } > "$_root/etc/resolv.conf"
+
+    # glibc's getaddrinfo is a separate, harder problem: it reads resolv.conf
+    # through glibc-INTERNAL calls that LD_PRELOAD cannot interpose, so it always
+    # sees the HOST file (campus-only => external names die with EAI_AGAIN no
+    # matter what the container file says). The only user-space lever left for
+    # curl/git/getent is /etc/hosts pinning, so generate a container hosts file:
+    # host entries + the handful of external domains the container actually
+    # talks to, resolved fresh at launch via DNS-over-HTTPS (TCP/443 egress
+    # works). Every DoH lookup has a static last-known-good fallback so a launch
+    # without DoH still pins something usable. IPs are pinned per-launch, not
+    # forever — the ROOT is node-local and rebuilt/re-written each launch.
+    _PIN_DOMAINS="api.anthropic.com=160.79.104.10
+claude.ai=160.79.104.6
+console.anthropic.com=160.79.104.14
+statsig.anthropic.com=160.79.104.10
+github.com=140.82.112.3
+api.github.com=140.82.112.6
+codeload.github.com=140.82.112.9
+objects.githubusercontent.com=185.199.108.133
+raw.githubusercontent.com=185.199.108.133
+registry.npmjs.org=104.16.0.35
+pypi.org=151.101.0.223
+files.pythonhosted.org=151.101.0.175"
+    {
+        cat /etc/hosts 2>/dev/null
+        echo "# --- pinned by udocker_dev.sh (compute-node DNS refuses external names) ---"
+        echo "$_PIN_DOMAINS" | while IFS='=' read -r _d _fallback; do
+            [ -n "$_d" ] || continue
+            _ip=$(timeout 6 curl -s "https://8.8.8.8/resolve?name=${_d}&type=A" 2>/dev/null \
+                  | grep -o '"data":"[0-9.]*"' | head -1 | cut -d'"' -f4)
+            echo "${_ip:-$_fallback} $_d"
+        done
+    } > "$_root/etc/hosts"
+fi
+
+# ── node DNS shim: route dns.lookup around the broken glibc resolver ──────────
+# glibc getaddrinfo is beyond repair from user space (it reads the HOST
+# resolv.conf and HOST /etc/hosts through glibc-internal calls that neither
+# LD_PRELOAD nor the container files can reach — verified: /etc/hosts pins are
+# visible to cat but invisible to getent). Node, however, exposes its resolver:
+# dns.lookup (used by fetch/undici/net — i.e., by Claude Code) wraps
+# getaddrinfo, while dns.resolve4 uses c-ares, which DOES honor the container
+# resolv.conf (public servers + use-vc over TCP) — verified working. So preload
+# a shim into every node process: try the native lookup first (keeps localhost,
+# /etc/hosts and internal names native — the broken path fails FAST with
+# EAI_AGAIN on REFUSED), and on failure re-resolve via c-ares.
+_NODE_SHIM="$HOME/.local/lib/node-dns-shim.cjs"
+mkdir -p "$HOME/.local/lib"
+cat > "$_NODE_SHIM" <<'NODESHIM'
+// Auto-generated by udocker_dev.sh — see the comment block there.
+// Fallback: native dns.lookup (glibc getaddrinfo, broken for external names on
+// compute nodes since 2026-08 DNS ACL change) -> c-ares resolve4/6, which uses
+// the container resolv.conf (8.8.8.8/1.1.1.1 over TCP).
+'use strict';
+const dns = require('dns');
+const { isIP } = require('net');
+const origLookup = dns.lookup.bind(dns);
+const origPromise = dns.promises.lookup.bind(dns.promises);
+
+function caresLookup(host, options, cb) {
+  dns.resolve4(host, (e4, a4) => {
+    if (!e4 && a4 && a4.length) {
+      const addrs = a4.map((a) => ({ address: a, family: 4 }));
+      return options.all ? cb(null, addrs) : cb(null, addrs[0].address, 4);
+    }
+    dns.resolve6(host, (e6, a6) => {
+      if (!e6 && a6 && a6.length) {
+        const addrs = a6.map((a) => ({ address: a, family: 6 }));
+        return options.all ? cb(null, addrs) : cb(null, addrs[0].address, 6);
+      }
+      cb(e4 || e6);
+    });
+  });
+}
+
+dns.lookup = function lookup(host, options, cb) {
+  if (typeof options === 'function') { cb = options; options = {}; }
+  if (typeof options === 'number') options = { family: options };
+  options = options || {};
+  if (!host || isIP(host)) return origLookup(host, options, cb);
+  origLookup(host, options, (err, addr, fam) => {
+    if (!err) return cb(null, addr, fam);
+    caresLookup(host, options, (err2, addr2, fam2) => {
+      if (err2) return cb(err, addr, fam); // surface the ORIGINAL error
+      cb(null, addr2, fam2);
+    });
+  });
+};
+
+dns.promises.lookup = async function lookup(host, options) {
+  try { return await origPromise(host, options); }
+  catch (err) {
+    if (!host || isIP(host)) throw err;
+    return new Promise((resolve, reject) => {
+      caresLookup(host, typeof options === 'object' && options ? options : {},
+        (e, addr, fam) => e ? reject(err)
+          : resolve(Array.isArray(addr) ? addr : { address: addr, family: fam }));
+    });
+  }
+};
+NODESHIM
+ENVS_NODE_OPTIONS="--require $_NODE_SHIM"
+
+# ── local CONNECT proxy: DNS for STATIC binaries (claude.exe) ─────────────────
+# claude v2.1.226+ is a static Bun executable: NODE_OPTIONS never loads in it,
+# and (same family as the static-git escapes) it bypasses libfakechroot, so it
+# reads the HOST resolv.conf -> campus server -> ENOTIMP, no matter what the
+# container files say. Static binaries can't be fixed by files or preloads — but
+# claude/curl/git all honor HTTP(S)_PROXY, and a proxy only needs to be reached
+# by IP (127.0.0.1, no DNS). So ship a tiny CONNECT proxy that runs as a
+# DYNAMIC node process inside the container (working DNS via c-ares + the
+# container resolv.conf) and resolves upstream names itself. The container
+# .zshrc starts it once per node and exports the proxy env vars.
+_DNS_PROXY="$HOME/.local/lib/dns-proxy.cjs"
+cat > "$_DNS_PROXY" <<'DNSPROXY'
+// Auto-generated by udocker_dev.sh — local forward proxy for static binaries
+// (claude.exe etc.) that cannot see the container's working DNS. Resolves
+// upstream hosts via c-ares (container resolv.conf: public servers over TCP).
+'use strict';
+const http = require('http');
+const net = require('net');
+const dns = require('dns');
+const PORT = parseInt(process.env.DNS_PROXY_PORT || '18373', 10);
+
+function resolveHost(host, cb) {
+  if (net.isIP(host)) return cb(null, host);
+  dns.resolve4(host, (e4, a4) => {
+    if (!e4 && a4 && a4.length) return cb(null, a4[0]);
+    dns.resolve6(host, (e6, a6) => {
+      if (!e6 && a6 && a6.length) return cb(null, a6[0]);
+      cb(e4 || e6 || new Error('unresolvable'));
+    });
+  });
+}
+
+const srv = http.createServer((req, res) => {  // plain-http forwards
+  let u; try { u = new URL(req.url); } catch { res.writeHead(400); return res.end(); }
+  resolveHost(u.hostname, (err, ip) => {
+    if (err) { res.writeHead(502); return res.end('proxy dns fail\n'); }
+    const p = http.request(
+      { host: ip, port: u.port || 80, path: u.pathname + u.search,
+        method: req.method, headers: req.headers },
+      (pr) => { res.writeHead(pr.statusCode, pr.headers); pr.pipe(res); });
+    p.on('error', () => { try { res.writeHead(502); res.end(); } catch {} });
+    req.pipe(p);
+  });
+});
+srv.on('connect', (req, sock, head) => {       // HTTPS tunnels
+  const i = req.url.lastIndexOf(':');
+  const host = i > 0 ? req.url.slice(0, i) : req.url;
+  const port = i > 0 ? parseInt(req.url.slice(i + 1), 10) : 443;
+  resolveHost(host, (err, ip) => {
+    if (err) { sock.end('HTTP/1.1 502 Bad Gateway\r\n\r\n'); return; }
+    const up = net.connect(port, ip, () => {
+      sock.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      if (head && head.length) up.write(head);
+      up.pipe(sock); sock.pipe(up);
+    });
+    up.on('error', () => sock.destroy());
+    sock.on('error', () => up.destroy());
+  });
+});
+srv.on('clientError', (e, sock) => sock.destroy());
+srv.listen(PORT, '127.0.0.1');
+DNSPROXY
 
 # (SLURM client passthrough removed — host RHEL7 squeue/sacct can't run under F3's
 #  glibc 2.39, and ssh-to-host is blocked by the getpwuid gap. Run SLURM commands
@@ -482,7 +765,8 @@ ENVS=( --env="HOME=$HOME"
        --env="LOGNAME=$USER"
        --env="SHELL=/bin/zsh"
        --env="CLAUDE_CONFIG_DIR=$CC_LOCAL"
-       --env="CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1" )
+       --env="CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
+       --env="NODE_OPTIONS=${ENVS_NODE_OPTIONS:-}" )
 
 # Point the static git (above) at its bundled CA so HTTPS remotes work both
 # in-container AND when lazygit's `git` escapes onto the RHEL7 host, whose CA
@@ -520,6 +804,16 @@ ENVS=( --env="HOME=$HOME"
 # can't map our uid — the getent append into the container's NSS files (setup,
 # above) is what makes id/whoami/the prompt resolve.
 [ "$#" -eq 0 ] && set -- -i
-udocker run --workdir="$HOME" "${ENVS[@]}" "${VOLS[@]}" \
+# --nosysdirs: udocker force-binds its sysdirs_list (/dev /proc /sys
+# /etc/resolv.conf /etc/host.conf /lib/modules) to the HOST on every run, which
+# is what kept the broken host resolv.conf visible in-container no matter what
+# -v said (see the DNS block above). So opt out and re-add every sysdir EXCEPT
+# /etc/resolv.conf explicitly — they still take the same host-passthrough branch
+# (membership in sysdirs_list), so /dev, /proc, /sys behave exactly as before.
+# The container then reads its own ROOT/etc/resolv.conf, written above.
+for _sd in /dev /proc /sys /etc/host.conf /lib/modules; do
+    [ -e "$_sd" ] && VOLS+=( -v "$_sd:$_sd" )
+done
+udocker run --nosysdirs --workdir="$HOME" "${ENVS[@]}" "${VOLS[@]}" \
     "$UDOCKER_CONTAINER" /bin/zsh "$@"
 exit $?
