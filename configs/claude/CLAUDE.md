@@ -74,3 +74,14 @@ paths; only the repair half is table-limited.
   `relocation error: ... _dl_find_dso_for_object ... GLIBC_PRIVATE`. That error
   is a *different* family from the reaper — it means "a static binary spawned a
   dynamic child", not "files are missing".
+
+  There is a **second, opposite** mismatch with the identical error text. `claude`
+  is a 297 MB **dynamic** Bun ELF whose `PT_INTERP` F3's patchelf pass left alone
+  (nvim's points at `<ROOT>//lib64/ld-linux-x86-64.so.2`; claude.exe still asks for
+  a bare `/lib64/ld-linux-x86-64.so.2`). The kernel resolves `PT_INTERP` against
+  the HOST root before any `LD_PRELOAD` exists, so RHEL7's glibc-2.17 loader starts
+  it against the container's glibc-2.39 libc. Fix in `udocker_dev.sh`: a
+  `/usr/local/bin/claude` wrapper naming the container's loader explicitly, by
+  absolute host path. So: **static binary → its dynamic children break; unpatched
+  dynamic binary → it breaks itself.** Check `readelf -l <bin> | grep interpreter`
+  to tell them apart.

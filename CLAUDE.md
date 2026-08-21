@@ -80,6 +80,17 @@ ROOT (udocker's own `bin/`+`lib/`, and the nvim plugin store), and `.zshrc`'s
   family from the reaper — "static spawned a dynamic child", not "files gone".
   Fixes in place: static git for lazygit *only*, `gh` wrapper redirecting
   `repo clone` to the dynamic git.
+  There is a **second, opposite** mismatch with the identical error text. `claude`
+  is a 297 MB **dynamic** Bun ELF whose `PT_INTERP` F3's patchelf pass left alone
+  (nvim's points at `<ROOT>//lib64/ld-linux-x86-64.so.2`; claude.exe still asks for
+  a bare `/lib64/ld-linux-x86-64.so.2`). The kernel resolves `PT_INTERP` against
+  the HOST root before any `LD_PRELOAD` exists, so RHEL7's glibc-2.17 loader starts
+  it against the container's glibc-2.39 libc. Fix in `udocker_dev.sh`: a
+  `/usr/local/bin/claude` wrapper naming the container's loader explicitly, by
+  absolute host path. So: **static binary → its dynamic children break; unpatched
+  dynamic binary → it breaks itself.** Check `readelf -l <bin> | grep interpreter`
+  to tell them apart.
+
 * **SSH to CIRCE is rate-limited by source IP** on a shared VPN pool address.
   One connection per session: use the `circe` alias, reuse the master
   (`ssh -O check`), and never re-run a refused command.
