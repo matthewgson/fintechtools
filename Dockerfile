@@ -781,7 +781,7 @@ EOF
 RUN cat >> /etc/zsh/zshrc << 'EOF'
 
 # ── container aliases (interactive only) ─────────────────────────────────────
-alias vi="nvim"
+# No `vi` alias: `vi` stays the system vi.
 alias vim="nvim"
 
 # ── nvim self-heal: restore /tmp-reaped LazyVim plugin files ─────────────────

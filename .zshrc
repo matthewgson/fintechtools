@@ -145,8 +145,12 @@ _nvim_heal() {
   : > "$sentinel"
 }
 nvim() { _nvim_heal; command nvim "$@"; }
-alias vi=nvim
 alias vim=nvim
+# `vi` is deliberately NOT aliased — it stays the system vi. The image's
+# /etc/zsh/zshrc still sets `alias vi="nvim"` and is sourced before this file, so
+# undo it here; that line is gone from the Dockerfile, and this unalias can go
+# once the image has been rebuilt.
+unalias vi 2>/dev/null || true
 
 # ── claude ───────────────────────────────────────────────────────────────────
 # No wrapper. claude-auto-retry (auto-resume on rate limit) was removed
