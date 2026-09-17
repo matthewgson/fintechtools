@@ -74,13 +74,46 @@ HAVE_TERM=0;     [ -f "${SCRIPT_DIR}/term_session.sh" ]     && HAVE_TERM=1
 HAVE_UDOCKER=0;  [ -f "${SCRIPT_DIR}/udocker_dev.sh" ]      && HAVE_UDOCKER=1
 HAVE_CLAUDEMD=0; [ -f "${SCRIPT_DIR}/configs/claude/CLAUDE.md" ] && HAVE_CLAUDEMD=1
 HAVE_CONNECT=0;  [ -f "${SCRIPT_DIR}/connect_nvim.sh" ]     && HAVE_CONNECT=1
-# bookokrat synctex wrappers → ~/.local/bin (on PATH inside the container).
-# Source the LIVE copies from ~/.local/bin (where they're edited and used) so
-# changes sync without a manual repo update; fall back to the repo-root snapshot.
-BOOKOKRAT_SCRIPTS=(bookokrat-split bookokrat-forward bookokrat-inverse)
+# bookokrat helper scripts. Source the LIVE Mac copies (where they're edited and
+# used) so changes sync without a manual repo update; fall back to the repo-root
+# snapshot. Each row is  LIVE-PATH-UNDER-~ | REPO-ROOT-SNAPSHOT | DEST-UNDER-~ .
+# The repo name is flat even where the destination is nested, so the repo root
+# stays flat — hence the explicit third column.
+#
+# Because the LIVE copy wins, an edit made in this repo alone is thrown away by
+# the next sync. These files are shared between the Mac and the container, so a
+# change has to be written to BOTH ~/.local/... and the snapshot here.
+#
+# Rows 1-3 are the synctex/opener wrappers (VimTeX forward+inverse search, yazi's
+# PDF opener). Row 4 is the fix for bookokrat#179 — under Ghostty the reader
+# draws its page as a classic Kitty placement that tmux holds no cell for, so
+# switching windows leaves the page painted over the window you moved to;
+# tmux-kitty-image-gc deletes it from outside tmux and repaints any reader still
+# on screen. configs/tmux/tmux.conf's window-change hooks call it, and
+# bookokrat-split appends it to the reader's own command line for the exit case.
+# Row 5 is not a bookokrat helper but follows the same live-first rule:
+# tmux-resurrect-age prints the age of the last prefix Ctrl-s save for the
+# status-bar pill built by configs/tmux/modules/resurrect.conf.
+#
+# NOT deployed any more: `.local/bin/override/bookokrat` and its
+# `.local/libexec/bookokrat-kitty-shim/tmux`. That pair forced bookokrat's
+# Unicode-placeholder anchor path on by answering its terminal probe with
+# "kitty". The anchor path places the page RELATIVE to a tmux-owned cell (Kitty
+# keys P=/Q=), which Ghostty 1.3.1 does not implement — it drops P/Q and paints
+# the page wherever the cursor sits, i.e. on top of yazi, with the reader's pane
+# left empty. Retired on the Mac 2026-09-04 and removed from here with it; do not
+# reintroduce either file.
+BOOKOKRAT_FILES=(
+  ".local/bin/bookokrat-split|bookokrat-split|.local/bin/bookokrat-split"
+  ".local/bin/bookokrat-forward|bookokrat-forward|.local/bin/bookokrat-forward"
+  ".local/bin/bookokrat-inverse|bookokrat-inverse|.local/bin/bookokrat-inverse"
+  ".local/bin/tmux-kitty-image-gc|tmux-kitty-image-gc|.local/bin/tmux-kitty-image-gc"
+  ".local/bin/tmux-resurrect-age|tmux-resurrect-age|.local/bin/tmux-resurrect-age"
+)
 HAVE_BOOKOKRAT_SCRIPTS=1
-for _s in "${BOOKOKRAT_SCRIPTS[@]}"; do
-  [ -f "$HOME/.local/bin/${_s}" ] || [ -f "${SCRIPT_DIR}/${_s}" ] || HAVE_BOOKOKRAT_SCRIPTS=0
+for _row in "${BOOKOKRAT_FILES[@]}"; do
+  IFS='|' read -r _live _repo _ <<<"$_row"
+  [ -f "$HOME/${_live}" ] || [ -f "${SCRIPT_DIR}/${_repo}" ] || HAVE_BOOKOKRAT_SCRIPTS=0
 done
 
 print_status "Will deploy:"
@@ -90,7 +123,7 @@ echo "  • ~/.config/{$(IFS=,; echo "${CONFIG_LIST[*]}")} → CIRCE"
 [ "$HAVE_TERM"     -eq 1 ] && echo "  • term_session.sh → CIRCE ~/sh/"
 [ "$HAVE_UDOCKER"  -eq 1 ] && echo "  • udocker_dev.sh → CIRCE ~/bin/  (udocker/F3 launcher)"
 [ "$HAVE_CLAUDEMD" -eq 1 ] && echo "  • configs/claude/CLAUDE.md → CIRCE ~/.claude/CLAUDE.md  (container notes for Claude)"
-[ "$HAVE_BOOKOKRAT_SCRIPTS" -eq 1 ] && echo "  • bookokrat-{split,forward,inverse} → CIRCE ~/.local/bin/"
+[ "$HAVE_BOOKOKRAT_SCRIPTS" -eq 1 ] && echo "  • bookokrat helpers → CIRCE ~/.local/bin/  (${#BOOKOKRAT_FILES[@]} files)"
 [ "$HAVE_CONNECT"  -eq 1 ] && echo "  • connect_nvim.sh → ~/  (local)"
 echo
 
@@ -252,12 +285,13 @@ if [ "$HAVE_UDOCKER" -eq 1 ]; then
 fi
 
 if [ "$HAVE_BOOKOKRAT_SCRIPTS" -eq 1 ]; then
-  mkdir -p "$STAGING/.local/bin"
-  for _s in "${BOOKOKRAT_SCRIPTS[@]}"; do
-    _src="$HOME/.local/bin/${_s}"; [ -f "$_src" ] || _src="${SCRIPT_DIR}/${_s}"  # prefer live
-    cp "$_src" "$STAGING/.local/bin/${_s}"
-    chmod +x "$STAGING/.local/bin/${_s}"
-    _staged+=(".local/bin/${_s}")
+  for _row in "${BOOKOKRAT_FILES[@]}"; do
+    IFS='|' read -r _live _repo _dest <<<"$_row"
+    _src="$HOME/${_live}"; [ -f "$_src" ] || _src="${SCRIPT_DIR}/${_repo}"  # prefer live
+    mkdir -p "$STAGING/$(dirname "${_dest}")"
+    cp "$_src" "$STAGING/${_dest}"
+    chmod +x "$STAGING/${_dest}"
+    _staged+=("${_dest}")
   done
 fi
 

@@ -235,6 +235,139 @@ _REAP_GUARDS=(
     "opt/TinyTeX/texmf-dist/tex/latex|*|100|opt/TinyTeX"
 )
 
+# ── PT_INTERP: put back the loader path a tar restore just threw away ────────
+# Second-order damage from the repair above, and the reason it lives here rather
+# than in the image. F3 does not chroot; it rewrites every ELF's PT_INTERP to the
+# ABSOLUTE HOST path of the container's own glibc-2.39 loader, once, at container
+# setup:
+#     /usr/bin/node  ->  <ROOT>//lib64/ld-linux-x86-64.so.2   (patched)
+#     tree-sitter    ->  /lib64/ld-linux-x86-64.so.2          (stock)
+# The kernel resolves PT_INTERP against the REAL host root before any LD_PRELOAD
+# exists, so a stock header hands the binary to RHEL7's glibc-2.17 loader, which
+# is then given the container's 2.39 libc and dies with the familiar
+#   relocation error: ... libc.so.6: symbol _dl_find_dso_for_object,
+#   version GLIBC_PRIVATE not defined in file ld-linux-x86-64.so.2
+# libfakechroot cannot help: it is an LD_PRELOAD shim and execve's PT_INTERP
+# lookup happens before it is loaded. This is the THIRD member of that error
+# family — static binary breaks its dynamic children (git, gh), unpatched
+# dynamic binary breaks itself (claude), and now: a patched binary REVERTED to
+# stock. Same message, three different causes.
+#
+# `fintech-rootfs.tar` is the pristine image, so every binary in it carries the
+# stock interpreter. `tar x` above therefore un-patches whatever it restores,
+# and the guarded subtrees are exactly where the non-apt binaries live:
+# usr/lib/node_modules (tree-sitter-cli, copilot-language-server, claude) and
+# usr/local/lib/R/site-library (processx's px/supervisor/sock, ps's px, which
+# callr and Quarto rendering sit on top of). Diagnosed 2026-09-03 after
+# tree-sitter failed to run: every unpatched binary on the node was inside one
+# of those two restore targets, and the R library had been restored on
+# 2026-08-21 with 1 of 43 packages surviving.
+#
+# So: re-point anything with a stock interpreter, right after the restore that
+# reverted it, and once more as a standing sweep for a hand-installed
+# `npm -g` / `install.packages()` that arrives after F3's one-shot pass.
+_INTERP_DIRS=(
+    usr/lib/node_modules
+    usr/local/lib/node_modules
+    usr/local/lib/R/site-library
+    usr/local/bin
+    usr/local/libexec
+)
+_INTERP_HOST_LDSO="/lib64/ld-linux-x86-64.so.2"   # the stock header we look for
+_interp_patchelf=""; _interp_ldso=""; _interp_have_file=""
+
+_interp_init() {
+    [ -n "$_root" ] || return 1
+    # udocker's own bundled patchelf — the same one F3 patches with, and the one
+    # the sweep at the top of this script keeps alive against the reaper.
+    _interp_patchelf="$UDOCKER_DIR/bin/patchelf-$(uname -m)"
+    [ -x "$_interp_patchelf" ] || return 1
+    [ -e "$_root$_INTERP_HOST_LDSO" ] || return 1
+    # Double slash on purpose: byte-identical to what F3 writes, so a patched
+    # binary here is indistinguishable from one patched at setup.
+    _interp_ldso="$_root/$_INTERP_HOST_LDSO"
+    [ -n "$_interp_have_file" ] || \
+        { command -v file >/dev/null 2>&1 && _interp_have_file=1 || _interp_have_file=0; }
+    return 0
+}
+
+# Print every ELF under $1 whose PT_INTERP is still the bare host path.
+# `file` reports the interpreter itself, so ONE process classifies the whole
+# tree — that matters because node_modules is tens of thousands of files and
+# this runs on every connect. A patched binary reads "interpreter /tmp/...",
+# so the fixed string below matches the broken set and nothing else.
+_interp_stock_elfs() {
+    if [ "$_interp_have_file" = "1" ]; then
+        find "$1" -type f -perm -u+x -print0 2>/dev/null \
+            | xargs -0 -r file -h -- 2>/dev/null \
+            | grep -F "interpreter $_INTERP_HOST_LDSO" \
+            | sed 's/:[[:space:]]*ELF .*//'
+    else
+        # No `file` on this host: ask patchelf per candidate. Correct, slower.
+        find "$1" -type f -perm -u+x -print 2>/dev/null | while IFS= read -r _f; do
+            [ "$("$_interp_patchelf" --print-interpreter "$_f" 2>/dev/null)" \
+                = "$_INTERP_HOST_LDSO" ] && printf '%s\n' "$_f"
+        done
+    fi
+}
+
+_interp_repair() {                       # $@ = subpaths under the ROOT
+    _interp_init || return 0
+    local sub f sz n=0
+    for sub in "$@"; do
+        [ -d "$_root/$sub" ] || continue
+        while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case "$f" in
+                # Owned by the claude wrapper further down, which starts the Bun
+                # binary through the container loader WITHOUT touching the file.
+                # A Bun executable hides a ~290 MB payload behind offsets stored
+                # in itself; patchelf grows and re-lays-out the file to fit a
+                # longer interpreter string, which is a good way to corrupt it.
+                # The wrapper already makes this one work — do not trade a
+                # working binary for a risky rewrite.
+                */claude-code/bin/claude.exe|*/claude-code-linux-x64/claude) continue ;;
+            esac
+            # Everything else is patched regardless of size, on purpose. A stock
+            # interpreter inside the ROOT means the binary CANNOT run here at
+            # all, so a rewrite that goes wrong costs nothing that was working;
+            # only claude, above, is already working and has something to lose.
+            # A big one is slow (patchelf re-lays-out the whole file), so say so
+            # rather than letting a connect look hung.
+            sz=$(stat -c %s "$f" 2>/dev/null || stat -f %z "$f" 2>/dev/null || echo 0)
+            [ "$sz" -gt 104857600 ] \
+                && err "PT_INTERP: ${f#"$_root"/} is $((sz / 1048576)) MB — patching, this takes a moment"
+            if "$_interp_patchelf" --set-interpreter "$_interp_ldso" "$f" 2>/dev/null; then
+                n=$((n + 1))
+            else
+                err "PT_INTERP: FAILED to patch ${f#"$_root"/}"
+            fi
+        done <<< "$(_interp_stock_elfs "$_root/$sub")"
+    done
+    [ "$n" -gt 0 ] && err "PT_INTERP: re-pointed $n binaries at the container loader"
+    return 0
+}
+
+# Standing sweep, for binaries that arrived after F3's one-shot pass. Gated on a
+# watched directory being newer than the stamp: `npm -g install` and
+# `install.packages()` both bump the mtime of the root they write into, so the
+# usual connect costs a handful of stat()s and nothing more. A tar restore does
+# NOT reliably trip it (tar puts the archived mtimes back), which is why
+# _reap_repair calls _interp_repair directly instead of relying on this.
+# The stamp is written last, so the repair's own mtime churn cannot re-arm it.
+_interp_sweep() {
+    [ -n "$_root" ] || return 0
+    local stamp="$_root/.interp-sweep-stamp" d fresh=0
+    if [ "${1:-}" != "--force" ] && [ -f "$stamp" ]; then
+        for d in "${_INTERP_DIRS[@]}"; do
+            [ -d "$_root/$d" ] && [ "$_root/$d" -nt "$stamp" ] && { fresh=1; break; }
+        done
+        [ "$fresh" -eq 1 ] || return 0
+    fi
+    _interp_repair "${_INTERP_DIRS[@]}"
+    : > "$stamp"
+}
+
 # Cost on a healthy ROOT: one `find -maxdepth 1 | head` per row — a dozen
 # directory reads that stop early, ~0.02s, and flat in the size of the ROOT.
 # Counts entries, not just files: R packages and TinyTeX bundles are directories.
@@ -259,8 +392,14 @@ _reap_repair() {
     fi
     for sub in "${damaged[@]}"; do
         err "/tmp reaper: restoring $sub from the rootfs tar ..."
-        tar xf "$FINTECH_TAR" -C "$_root" "$sub" 2>/dev/null \
-            || err "/tmp reaper: restore of $sub FAILED (stale tar?)"
+        if tar xf "$FINTECH_TAR" -C "$_root" "$sub" 2>/dev/null; then
+            # The tar is the pristine image, so everything just restored carries
+            # the STOCK interpreter and would die under the host loader. Put F3's
+            # patch back on exactly what we replaced. See the PT_INTERP block above.
+            _interp_repair "$sub"
+        else
+            err "/tmp reaper: restore of $sub FAILED (stale tar?)"
+        fi
     done
 }
 
@@ -281,13 +420,18 @@ _reap_sweep() {
 }
 
 _reap_repair
+_interp_sweep
 _reap_sweep
 
 # `udocker_dev.sh --doctor` — check/repair the ROOT and exit, without starting a
 # container. For diagnosing from a node shell; a plain reconnect does the same.
 if [ "${1:-}" = "--doctor" ]; then
     _reap_repair && err "ROOT $_root: reaper guards satisfied"
-    exit $?
+    _rc=$?
+    # Unconditional, ignoring the mtime gate: on a node you are already
+    # suspicious of, scan every watched tree for stock interpreters.
+    _interp_sweep --force
+    exit $_rc
 fi
 
 # Defensive hook: if a glibc-2.39-matched libfakechroot is ever dropped at
@@ -463,68 +607,60 @@ LG
     fi
 fi
 
-# ── gh (GitHub CLI) → redirect `repo clone` to the dynamic in-container git ──
+# ── gh (GitHub CLI) → give it git (and friends) it can run from the host ─────
 # gh is a STATIC Go binary, so — exactly like the static git above, one level up
-# — udocker's F3 libfakechroot never loads into it (LD_PRELOAD is ignored by
-# static binaries). `gh repo clone` execve()s a `git` child (and, for a private
-# repo, a `/bin/sh` credential helper); those DYNAMIC children get a mismatched
-# glibc loader and die with
-# "relocation error: ... _dl_find_dso_for_object ... not defined in ld-linux"
-# (verified live 2026-07-01: public clones died on the git child, private on the
-# helper's /bin/sh). gh used as a LEAF (api, auth, pr view, ...) runs fine — only
-# the git-spawning `repo clone` breaks. Handing gh the static host-runnable git
-# (like lazygit) only half-works: the transport clones, but gh's `!sh` credential
-# helper still can't run under the escape. So instead wrap gh at
-# /usr/local/bin/gh (precedes /usr/bin in PATH) with a shim that redirects
-# `repo clone` to the DYNAMIC /usr/bin/git — which runs under libfakechroot and
-# authenticates via the gh credential helper from container.gitconfig (see the
-# GIT_CONFIG_GLOBAL block below; this used to rely on the `store` helper, whose
-# stale token was the bug) with no escape and a token-free origin URL. Everything
-# else passes through to the
-# real /usr/bin/gh. Installed into the container ROOT per node; a rebuilt ROOT
-# ships a plain /usr/bin/gh and no /usr/local/bin/gh, so this re-wraps per node.
+# — udocker's F3 libfakechroot never loads into it (static binaries ignore
+# LD_PRELOAD). Whenever gh runs `git` (repo create/clone/fork/sync, pr checkout,
+# repo set-default, ...) its PATH lookup and execve happen against the HOST
+# root: it finds RHEL7's /usr/bin/git, which starts under the host glibc-2.17
+# loader but inherits F3's LD_LIBRARY_PATH into the container's glibc 2.39:
+#   failed to run git: /usr/bin/git: relocation error: <ROOT>//usr/lib/
+#   x86_64-linux-gnu/libc.so.6: symbol _dl_find_dso_for_object, version
+#   GLIBC_PRIVATE not defined in file ld-linux-x86-64.so.2
+# gh used as a leaf (api, auth, pr view, ...) never spawns anything and is fine.
+#
+# Fix: the wrapper at /usr/local/bin/gh (precedes /usr/bin in PATH) prepends a
+# directory of symlinks to the CONTAINER's binaries, by absolute HOST path
+# (/tmp is bound 1:1, so that path is valid on both sides). The host kernel then
+# execs the container's own git, whose PT_INTERP F3 already patched to
+# <ROOT>//lib64/ld-linux-x86-64.so.2; the LD_PRELOAD gh passed along loads
+# libfakechroot into it, and from there git is an ordinary in-container process —
+# its credential helper (`!gh auth git-credential` via /bin/sh), git-remote-https
+# and ssh children all go through fakechroot's execve hook. Verified live
+# 2026-09-17 on mdc-1057-13-13: public clone, private clone (helper auth) and
+# `gh repo set-default` all work; the same calls without the shim reproduce the
+# relocation error.
+#
+# This replaces the 2026-07-01 wrapper that only rewrote `gh repo clone` into a
+# bare `git clone` and so left `gh repo create --clone/--push`, fork, sync and
+# `pr checkout` broken. Only ELF targets are linked: a script's `#!/bin/sh`
+# would again be resolved on the host. git is the verified one; the editor and
+# pager gh launches (pr create/issue create, diff) were equally unrunnable on
+# the host before, so linking them can only help.
+#
+# Written into the node-local ROOT with that ROOT's path baked in; rewritten
+# whenever the revision marker or the ROOT path in it is out of date.
 if [ -n "$_root" ] && [ -x "$_root/usr/bin/gh" ]; then
     _ghwrap="$_root/usr/local/bin/gh"
-    if [ ! -e "$_ghwrap" ] || ! grep -q 'Auto-generated by udocker_dev.sh' "$_ghwrap" 2>/dev/null; then
-        mkdir -p "$_root/usr/local/bin" 2>/dev/null
-        cat > "$_ghwrap.tmp.$$" <<'GH'
-#!/bin/sh
-# Auto-generated by udocker_dev.sh. gh (static Go) execve()s `git` for
-# `gh repo clone`; a static binary bypasses udocker's F3 libfakechroot, so the
-# dynamic git (and, for private repos, the `/bin/sh` credential helper) it spawns
-# die with a glibc relocation error ("_dl_find_dso_for_object ... not defined in
-# ld-linux"). gh as a leaf (api, auth, pr view, ...) is fine — only `repo clone`
-# breaks, so redirect just that to the dynamic /usr/bin/git, which runs under
-# libfakechroot and authenticates via the `store` helper. Everything else passes
-# through to the real gh unchanged. Only the plain `repo clone <repo> [dir]
-# [-- <git args>]` form is redirected; gh-specific flags (e.g. -u for a fork's
-# upstream remote) fall through to the real gh.
-REAL=/usr/bin/gh
-if [ "$1" = "repo" ] && [ "$2" = "clone" ]; then
-    repo= dir= gitargs= sawdd=0 flag=0 n=0
-    for a in "$@"; do
-        n=$((n+1)); [ "$n" -le 2 ] && continue
-        if [ "$sawdd" = 1 ]; then gitargs="$gitargs $a"; continue; fi
-        case "$a" in
-            --) sawdd=1 ;;
-            -*) flag=1; break ;;
-            *) if [ -z "$repo" ]; then repo=$a; elif [ -z "$dir" ]; then dir=$a; fi ;;
-        esac
+    _ghshim="$_root/usr/local/libexec/gh-hostpath"
+    _ghrev="GH_WRAPPER_REV=2"
+    mkdir -p "$_ghshim" "$_root/usr/local/bin" 2>/dev/null
+    for _t in usr/bin/git usr/bin/ssh usr/bin/less usr/local/bin/nvim usr/bin/nvim; do
+        _n="${_t##*/}"
+        [ -e "$_ghshim/$_n" ] && continue       # nvim: first location wins
+        [ -f "$_root/$_t" ] && [ "$(head -c 4 "$_root/$_t" 2>/dev/null)" = "$(printf '\177ELF')" ] \
+            && ln -sfn "$_root/$_t" "$_ghshim/$_n" 2>/dev/null
     done
-    if [ "$flag" = 0 ] && [ -n "$repo" ]; then
-        case "$repo" in
-            http://*|https://*|git://*|ssh://*|git@*) url=$repo ;;
-            */*) url="https://github.com/${repo%.git}.git" ;;
-            *) u=$("$REAL" repo view "$repo" --json url -q .url 2>/dev/null)
-               [ -n "$u" ] && url="$u.git" || url="https://github.com/$repo.git" ;;
-        esac
-        # shellcheck disable=SC2086
-        exec git clone "$url" ${dir:+"$dir"} $gitargs
-    fi
-fi
-exec "$REAL" "$@"
-GH
-        chmod +x "$_ghwrap.tmp.$$" 2>/dev/null \
+    if ! grep -q "$_ghrev" "$_ghwrap" 2>/dev/null || ! grep -qF "$_ghshim" "$_ghwrap" 2>/dev/null; then
+        {
+            echo '#!/bin/sh'
+            echo "# $_ghrev"
+            echo '# Auto-generated by udocker_dev.sh — see the gh block there. gh is static,'
+            echo '# so the `git` it spawns is looked up and exec'"'"'d on the HOST. Put the'
+            echo "# container's own (PT_INTERP-patched) binaries first, by host path."
+            echo "export PATH=\"$_ghshim:\$PATH\""; echo "exec /usr/bin/gh \"\$@\""
+        } > "$_ghwrap.tmp.$$" 2>/dev/null \
+            && chmod +x "$_ghwrap.tmp.$$" 2>/dev/null \
             && mv -f "$_ghwrap.tmp.$$" "$_ghwrap" 2>/dev/null
         rm -f "$_ghwrap.tmp.$$" 2>/dev/null
     fi
@@ -575,6 +711,40 @@ if [ -n "$_root" ] && [ -x "$_cl_exe" ] && [ -e "$_root/lib64/ld-linux-x86-64.so
             && mv -f "$_clwrap.tmp.$$" "$_clwrap" 2>/dev/null
         rm -f "$_clwrap.tmp.$$" 2>/dev/null
     fi
+fi
+
+# ── Locale: hand glibc the container's locale data by HOST path ──────────────
+# setlocale() opens its data through glibc-INTERNAL calls that libfakechroot
+# cannot interpose (same wall as resolv.conf in the DNS block below), so it
+# reads the HOST's RHEL7 /usr/lib/locale, whose format glibc 2.39 rejects.
+# Every process therefore silently ran in the C locale despite
+# LC_ALL=en_US.UTF-8: `locale` says "Cannot set LC_ALL to default locale", and
+# zsh counts multibyte characters by the BYTE. The visible damage is the
+# prompt: starship's first line is mostly 3-4-byte powerline/Nerd glyphs, so zsh
+# believed it wrapped over several rows, and every vi-mode switch (starship's
+# zle-keymap-select does a reset-prompt; zsh picks vi keys because $EDITOR
+# contains "vi") moved the cursor up that many rows and erased the output
+# above. Verified 2026-09-17: `s="░▒▓❯"; ${(m)#s}` was 12, is 4 with LOCPATH.
+#
+# LOCPATH is honoured by that same internal loader, but it disables the
+# locale-archive (where Ubuntu keeps en_US), so compile a directory-form
+# en_US.UTF-8 next to the stock C.utf8 dir. Done host-side with the container's
+# own localedef, started through the container loader (the host localedef would
+# write the old format): ~1s, once per ROOT, re-made if a reaper restore or a
+# fresh ROOT drops it. .zshrc repeats the export for tmux servers started
+# before this existed.
+if [ -n "$_root" ] && [ -d "$_root/usr/lib/locale" ]; then
+    _locdir="$_root/usr/lib/locale/en_US.UTF-8"
+    if [ ! -f "$_locdir/LC_CTYPE" ] && [ -x "$_root/usr/bin/localedef" ] \
+       && [ -d "$_root/usr/share/i18n/locales" ]; then
+        mkdir -p "$_locdir" 2>/dev/null
+        env -i I18NPATH="$_root/usr/share/i18n" \
+            "$_root/lib64/ld-linux-x86-64.so.2" \
+            --library-path "$_root/usr/lib/x86_64-linux-gnu" \
+            "$_root/usr/bin/localedef" -i en_US -f UTF-8 "$_locdir" >/dev/null 2>&1 \
+            || { err "locale: could not compile en_US.UTF-8 (prompt widths will be wrong)"; rm -rf "$_locdir"; }
+    fi
+    [ -f "$_locdir/LC_CTYPE" ] && _LOCPATH="$_root/usr/lib/locale"
 fi
 
 # ── Claude Code config dir → node-local /tmp ─────────────────────────────────
@@ -833,6 +1003,7 @@ ENVS=( --env="HOME=$HOME"
        --env="CLAUDE_CONFIG_DIR=$CC_LOCAL"
        --env="CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
        --env="NODE_OPTIONS=${ENVS_NODE_OPTIONS:-}" )
+[ -n "${_LOCPATH:-}" ] && ENVS+=( --env="LOCPATH=$_LOCPATH" )   # see the Locale block
 
 # Point the static git (above) at its bundled CA so HTTPS remotes work both
 # in-container AND when lazygit's `git` escapes onto the RHEL7 host, whose CA

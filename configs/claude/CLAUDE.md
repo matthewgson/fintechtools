@@ -65,6 +65,29 @@ paths; only the repair half is table-limited.
 * **`.venv` here is not a real venv** — `.venv/bin/python3` symlinks to
   `/usr/bin/python3`, so it inherits the system stdlib and offers no fallback
   when that stdlib is damaged. Only `site-packages` is local.
+* **PDFs open in bookokrat, in a half split beside the caller.** yazi's `o` on a
+  `*.pdf`/`*.epub`, snacks-explorer's `o`, `gx`/`vim.ui.open` and VimTeX's
+  `<localleader>lv` all end up in `~/.local/bin/bookokrat-split`, which splits the
+  current window and starts `/usr/local/bin/bookokrat` there. Opening a second PDF
+  reuses that reader pane (`respawn-pane`) instead of splitting again; opening one
+  already on screen just jumps to it. Panes are tagged with the pane option
+  `@bkfile`, which is how both of those are recognised.
+
+  **A page left painted over the window you switched to is a known bug
+  (bookokrat#179), and the cleanup is already wired.** Under Ghostty the page is a
+  classic Kitty placement, and tmux holds no cell that stands for it, so tmux
+  cannot repaint it away. `~/.local/bin/tmux-kitty-image-gc` deletes it by writing
+  the Kitty delete escape straight to the client tty — `~/.config/tmux/tmux.conf`
+  calls it from `session-window-changed` / `client-session-changed`, and
+  `bookokrat-split` appends it to the reader's own command line so quitting the
+  reader also clears the page. Returning to a reader costs a ~1-1.5s repaint
+  (remote render + re-upload); that is the SSH page floor, not a fault.
+
+  Do **not** reintroduce `~/.local/bin/override/bookokrat` or its `tmux` shim.
+  That wrapper forced bookokrat's Unicode-placeholder anchor path on, which
+  Ghostty 1.3.1 does not implement — the page lands on top of yazi and the
+  reader's pane stays empty — and the anchor path needs SHM transmission, which
+  cannot reach a terminal on another machine anyway.
 * **Config files are one-way** from the `05_Container` repo. `~/.zshrc`,
   `~/bin/*`, `~/.config/*` and this file are rsynced over by `sync_configs.sh`;
   any live edit here is silently reverted by the next sync. Fix the repo copy.

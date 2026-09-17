@@ -3,6 +3,15 @@ export PATH=$HOME/local/bin:$PATH
 export DYLD_LIBRARY_PATH=${HOME}/local/lib:$DYLD_LIBRARY_PATH
 export EDITOR=nvim
 
+# Container: glibc loads locale data from the HOST path, so point LOCPATH at the
+# ROOT's (see the Locale block in udocker_dev.sh). Without it zsh runs in the C
+# locale, mis-measures starship's glyphs, and a vi-mode switch erases the lines
+# above the prompt. Set here too for tmux servers older than that launcher
+# change. Must precede the LC_ALL assignment, which is what makes zsh reload.
+if [ -n "${FAKECHROOT_BASE:-}" ] && [ -z "${LOCPATH:-}" ] \
+   && [ -f "$FAKECHROOT_BASE/usr/lib/locale/en_US.UTF-8/LC_CTYPE" ]; then
+  export LOCPATH="$FAKECHROOT_BASE/usr/lib/locale"
+fi
 export LANG="en_US.UTF-8"
 export LC_ALL="en_US.UTF-8"
 
@@ -16,13 +25,38 @@ function y() {
 }
 export PATH="$HOME/.local/bin:$PATH"
 
+# === bookokrat: the name on $PATH is the real binary ========================
+# /usr/local/bin/bookokrat, installed by the image. Nothing shadows it, and
+# nothing should: the ~/.local/bin/override/bookokrat wrapper that briefly
+# existed on both machines is retired. It answered bookokrat's outer-terminal
+# probe with "kitty" to force the Unicode-placeholder anchor path on, and
+# Ghostty 1.3.1 does not implement the relative placements that path emits
+# (Kitty keys P=/Q=) — it drops them and paints the page wherever the cursor
+# sits, which is on top of yazi, leaving the reader's own pane empty. Retired
+# on the Mac 2026-09-04; it was never viable here anyway, since the anchor path
+# is implemented only over SHM transmission and bookokrat's shm object lives in
+# /dev/shm on the compute node while Ghostty runs on the Mac.
+#
+# The ghost page that wrapper was written to prevent — a page left painted over
+# the window you switched to (bookokrat#179) — is handled instead by
+# ~/.local/bin/tmux-kitty-image-gc, which configs/tmux/tmux.conf calls from the
+# window-change hooks and bookokrat-split appends to the reader's own command
+# line for the exit case.
+typeset -U path   # re-sourcing .zshrc must not stack duplicate PATH entries
+
 # === Zoxide Initialization ===
 # This creates the hooks so every directory change is automatically recorded
 eval "$(zoxide init zsh)"
 
 # Starship prompt initialization
+# Only once per shell. The image's /etc/zsh/zshrc has already run
+# `starship init zsh` in the container; a second init wraps the first one's
+# zle-keymap-select, so each vi-mode switch runs `zle reset-prompt` twice, and
+# zsh then redraws the two-line prompt one row too high per call, erasing
+# output above it (2 lines per Esc/i, verified 2026-09-17). STARSHIP_CONFIG is
+# read at every render, so exporting it after the image's init still applies.
 export STARSHIP_CONFIG="$HOME/.config/starship/starship.toml"
-eval "$(starship init zsh)"
+(( ${+functions[prompt_starship_precmd]} )) || eval "$(starship init zsh)"
 
 # fzf Integration
 # Use command substitution (eval "$(...)") rather than process substitution
@@ -97,6 +131,50 @@ tm() { tmux new-session -A -s "${1:-main}"; }
 #      git then fails EVERY object lookup there ("index file ... is too small").
 #      Since the loop sends stderr to /dev/null and ignores the exit status,
 #      that failure was completely silent.
+# === Un-stick a lazy.nvim clone that was interrupted =========================
+# Nothing to do with the /tmp reaper below, and it is worth knowing the two
+# apart because they present almost identically — a plugin that behaves as
+# though it were never installed.
+#
+# lazy.nvim writes an empty "<plugin-dir>.cloning" marker beside the directory
+# BEFORE it clones, and unlinks it from the clone task's on_exit only when git
+# exited 0 (lazy/manage/task/git.lua). So the marker is armed before the work
+# and disarmed after it. Quit nvim — or stall the network, which on a compute
+# node means the CONNECT proxy — while a first install is in flight, and the
+# marker outlives the clone that was supposed to clear it.
+#
+# From then on it never converges on its own. lazy/core/plugin.lua's
+# update_state() drops any name with a marker from the installed set, ignoring
+# the perfectly good directory sitting right next to it; the clone task then
+# sees that directory already exists, fs.clean()s it away, re-arms the marker
+# and clones again — every single startup, forever. Quit early once more and
+# it re-arms. Cost is a full re-clone of that plugin at each launch.
+#
+# Bitten 2026-09-03 by quarto-render.nvim: every other plugin had been
+# installed in Jul/Aug and pinned in lazy-lock.json, so it was the only one
+# still doing a first install and the only one exposed. A fresh node or a fresh
+# ROOT puts EVERY plugin back into exactly that state at once, which is why
+# this runs unconditionally rather than behind the reaper's sentinel.
+#
+# A resolvable HEAD next to the marker proves the clone did finish, so the
+# marker is the only thing removed. If HEAD does not resolve the checkout
+# really is unfinished — leave it alone, lazy's re-clone is then correct. This
+# cannot race a live clone: git writes HEAD's commit last, and a concurrent
+# clone that succeeds anyway just unlinks a file that is already gone.
+# Cost on a healthy store: one readdir, no git spawned.
+_nvim_unstick_clones() {
+  local lazy="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy"
+  [ -d "$lazy" ] || return 0
+  local m d
+  for m in "$lazy"/*.cloning(N.); do
+    d="${m%.cloning}"
+    [ -d "$d/.git" ] || continue
+    command git -C "$d" rev-parse --verify --quiet HEAD >/dev/null 2>&1 || continue
+    print -u2 "nvim: clearing stale lazy.nvim clone marker for ${d:t} (it would re-clone every launch)"
+    rm -f -- "$m"
+  done
+}
+
 _nvim_heal() {
   local lazy="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy"
   [ -d "$lazy" ] || return 0
@@ -144,7 +222,7 @@ _nvim_heal() {
 
   : > "$sentinel"
 }
-nvim() { _nvim_heal; command nvim "$@"; }
+nvim() { _nvim_unstick_clones; _nvim_heal; command nvim "$@"; }
 alias vim=nvim
 # `vi` is deliberately NOT aliased — it stays the system vi. The image's
 # /etc/zsh/zshrc still sets `alias vi="nvim"` and is sourced before this file, so

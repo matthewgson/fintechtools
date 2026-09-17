@@ -23,31 +23,31 @@
 FROM alpine:3.20 AS gitstatic
 ARG GIT_STATIC_VERSION=2.43.0
 RUN apk add --no-cache \
-        build-base wget tar xz ca-certificates pkgconf binutils \
-        zlib-dev zlib-static openssl-dev openssl-libs-static \
-        curl-dev curl-static expat-dev expat-static \
-        nghttp2-static brotli-static zstd-static c-ares-static \
-        libidn2-static libunistring-static libpsl-static && \
-    cd /tmp && \
-    wget -q -O git.tar.xz "https://www.kernel.org/pub/software/scm/git/git-${GIT_STATIC_VERSION}.tar.xz" && \
-    tar xf git.tar.xz && cd "git-${GIT_STATIC_VERSION}" && \
-    make -j"$(nproc)" \
-        CC=gcc \
-        CFLAGS="-O2 -fno-pie" \
-        LDFLAGS="-static -no-pie -s -Wl,--allow-multiple-definition" \
-        CURL_LDFLAGS="$(pkg-config --static --libs libcurl)" \
-        NO_GETTEXT=1 NO_TCLTK=1 NO_PERL=1 NO_PYTHON=1 NO_REGEX=NeedsStartEnd \
-        RUNTIME_PREFIX=YesPlease \
-        prefix=/opt/git-static \
-        install && \
-    mkdir -p /opt/git-static/ssl && \
-    cp /etc/ssl/certs/ca-certificates.crt /opt/git-static/ssl/cacert.pem && \
-    cd /opt/git-static/libexec/git-core && \
-    rm -f git-daemon git-http-backend git-http-fetch git-http-push \
-          git-imap-send git-shell scalar git-sh-i18n--envsubst && \
-    rm -f /opt/git-static/bin/scalar /opt/git-static/bin/git-shell && \
-    [ -z "$(readelf -l /opt/git-static/bin/git | grep -i interpreter)" ] && \
-    /opt/git-static/bin/git version
+  build-base wget tar xz ca-certificates pkgconf binutils \
+  zlib-dev zlib-static openssl-dev openssl-libs-static \
+  curl-dev curl-static expat-dev expat-static \
+  nghttp2-static brotli-static zstd-static c-ares-static \
+  libidn2-static libunistring-static libpsl-static && \
+  cd /tmp && \
+  wget -q -O git.tar.xz "https://www.kernel.org/pub/software/scm/git/git-${GIT_STATIC_VERSION}.tar.xz" && \
+  tar xf git.tar.xz && cd "git-${GIT_STATIC_VERSION}" && \
+  make -j"$(nproc)" \
+  CC=gcc \
+  CFLAGS="-O2 -fno-pie" \
+  LDFLAGS="-static -no-pie -s -Wl,--allow-multiple-definition" \
+  CURL_LDFLAGS="$(pkg-config --static --libs libcurl)" \
+  NO_GETTEXT=1 NO_TCLTK=1 NO_PERL=1 NO_PYTHON=1 NO_REGEX=NeedsStartEnd \
+  RUNTIME_PREFIX=YesPlease \
+  prefix=/opt/git-static \
+  install && \
+  mkdir -p /opt/git-static/ssl && \
+  cp /etc/ssl/certs/ca-certificates.crt /opt/git-static/ssl/cacert.pem && \
+  cd /opt/git-static/libexec/git-core && \
+  rm -f git-daemon git-http-backend git-http-fetch git-http-push \
+  git-imap-send git-shell scalar git-sh-i18n--envsubst && \
+  rm -f /opt/git-static/bin/scalar /opt/git-static/bin/git-shell && \
+  [ -z "$(readelf -l /opt/git-static/bin/git | grep -i interpreter)" ] && \
+  /opt/git-static/bin/git version
 
 FROM ubuntu:24.04
 
@@ -56,8 +56,8 @@ LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Claude Cod
 LABEL version="0.8"
 
 # ─── Version pins — bump here to upgrade any tool ────────────────────────────
-ARG UV_VERSION=0.11.21
-ARG QUARTO_VERSION=1.9.38
+ARG UV_VERSION=latest
+ARG QUARTO_VERSION=latest
 ARG TINYTEX_TAG=v2026.06
 # Neovim and Claude Code track the LATEST release on every build (see Stage 6 and
 # Stage 11). build_container.sh resolves `latest` to the concrete version before
@@ -72,23 +72,25 @@ ARG TINYTEX_TAG=v2026.06
 # (see configs/nvim/lua/plugins/vimtex.lua).
 ARG NVIM_VERSION=latest
 ARG CLAUDE_CODE_VERSION=latest
-ARG LAZYGIT_VERSION=0.62.2
-ARG YAZI_VERSION=v26.5.6
-ARG RESVG_VERSION=0.47.0
-ARG FZF_VERSION=0.73.1
-ARG ZOXIDE_VERSION=0.9.9
-ARG BOTTOM_VERSION=0.12.3
+ARG LAZYGIT_VERSION=latest
+ARG YAZI_VERSION=latest
+ARG RESVG_VERSION=latest
+ARG FZF_VERSION=latest
+ARG ZOXIDE_VERSION=latest
+ARG BOTTOM_VERSION=latest
 # bookokrat = terminal PDF/EPUB reader (kitty graphics); the primary VimTeX/yazi
 # viewer now — renders in-terminal over SSH, no X11/XQuartz. Pinned to the Mac.
-ARG BOOKOKRAT_VERSION=v0.3.12
+ARG BOOKOKRAT_VERSION=latest
 # catppuccin/tmux = tmux status-bar theme, baked into the image and sourced
 # directly (no TPM at runtime). Pinned to match the Mac (which tracks "latest").
-ARG CATPPUCCIN_TMUX_VERSION=v2.3.0
-# Session persistence for tmux (prefix Ctrl-s save / Ctrl-r restore, plus a
-# 15-minute autosave). Baked like catppuccin and sourced directly from
-# configs/tmux/tmux.conf — no TPM. continuum drives resurrect, so both are needed.
-ARG TMUX_RESURRECT_VERSION=v4.0.0
-ARG TMUX_CONTINUUM_VERSION=v3.1.0
+ARG CATPPUCCIN_TMUX_VERSION=latest
+# Session persistence for tmux (prefix Ctrl-s save / Ctrl-r restore, manual
+# only). Baked like catppuccin and sourced directly from configs/tmux/tmux.conf
+# — no TPM. resurrect does the work; continuum (the autosave timer and the
+# auto-restore hook) is baked in but deliberately NOT sourced, so turning
+# autosave back on is a tmux.conf edit rather than a rebuild.
+ARG TMUX_RESURRECT_VERSION=latest
+ARG TMUX_CONTINUUM_VERSION=latest
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/New_York
@@ -108,99 +110,108 @@ WORKDIR /work/g/gson
 # update`.  Bump retries + per-request timeout so transient mirror windows
 # don't kill the build.
 RUN printf '%s\n' \
-        'Acquire::Retries "5";' \
-        'Acquire::http::Timeout "60";' \
-        'Acquire::https::Timeout "60";' \
-        > /etc/apt/apt.conf.d/99-retries
+  'Acquire::Retries "5";' \
+  'Acquire::http::Timeout "60";' \
+  'Acquire::https::Timeout "60";' \
+  > /etc/apt/apt.conf.d/99-retries
 
 # ─── Stage 1: Core system packages ──────────────────────────────────────────
 RUN apt-get update && \
-    apt-get install -y \
-    # Locale / repo tooling
-    locales \
-    lsb-release \
-    software-properties-common \
-    gnupg \
-    ca-certificates \
-    # Build toolchain
-    build-essential \
-    pkg-config \
-    cmake \
-    ninja-build \
-    autoconf \
-    automake \
-    libtool \
-    # Java (H2O dependency)
-    openjdk-21-jdk \
-    # Compression / networking
-    libcurl4-openssl-dev \
-    libssl-dev \
-    libssh2-1-dev \
-    libz-dev \
-    libbz2-dev \
-    liblz4-dev \
-    libzstd-dev \
-    libsnappy-dev \
-    xz-utils \
-    # XML / protobuf
-    libxml2-dev \
-    libxml2-utils \
-    libprotobuf-dev \
-    protobuf-compiler \
-    # BLAS / LAPACK
-    libblas-dev \
-    liblapack-dev \
-    libopenblas-dev \
-    # FFI / HDF5
-    libffi-dev \
-    libhdf5-dev \
-    # Graphics / font libs (R + image previews)
-    libfontconfig1-dev \
-    libfreetype6-dev \
-    libpng-dev \
-    libtiff5-dev \
-    libjpeg-dev \
-    libcairo2-dev \
-    libxt-dev \
-    libfribidi-dev \
-    libharfbuzz-dev \
-    libgit2-dev \
-    # Database / ODBC (RPostgres, RSQLite, RODBC/odbc)
-    libpq-dev \
-    libsqlite3-dev \
-    unixodbc-dev \
-    # Neovim / LazyVim CLI deps
-    ripgrep \
-    fd-find \
-    unzip \
-    # Yazi required + recommended optional deps (per yazi-rs.github.io/docs/installation)
-    file \
-    p7zip-full \
-    jq \
-    poppler-utils \
-    imagemagick \
-    unar \
-    # Terminfo (ghostty + many others) for SSH terminal compatibility
-    ncurses-term \
-    # clear command
-    ncurses-bin \
-    # General utilities
-    pandoc \
-    git \
-    rsync \
-    # (tmux is NOT installed from apt — built from source in Stage 8g below,
-    #  because 24.04 pins tmux 3.4 which is too old for ghostty's CSI-u keys.)
-    nano \
-    vim \
-    wget \
-    curl \
-    openssh-client \
-    man-db \
-    less \
-    zsh && \
-    locale-gen en_US.UTF-8 && \
-    usermod -s /bin/zsh root && \
-    rm -rf /var/lib/apt/lists/*
+  apt-get install -y \
+  # Locale / repo tooling
+  locales \
+  lsb-release \
+  software-properties-common \
+  gnupg \
+  ca-certificates \
+  # Build toolchain
+  build-essential \
+  pkg-config \
+  cmake \
+  ninja-build \
+  autoconf \
+  automake \
+  libtool \
+  # Java (H2O dependency)
+  openjdk-21-jdk \
+  # Compression / networking
+  libcurl4-openssl-dev \
+  libssl-dev \
+  libssh2-1-dev \
+  libz-dev \
+  libbz2-dev \
+  liblz4-dev \
+  libzstd-dev \
+  libsnappy-dev \
+  xz-utils \
+  # XML / protobuf
+  libxml2-dev \
+  libxml2-utils \
+  libprotobuf-dev \
+  protobuf-compiler \
+  # BLAS / LAPACK
+  libblas-dev \
+  liblapack-dev \
+  libopenblas-dev \
+  # FFI / HDF5
+  libffi-dev \
+  libhdf5-dev \
+  # Graphics / font libs (R + image previews)
+  libfontconfig1-dev \
+  libfreetype6-dev \
+  libpng-dev \
+  libtiff5-dev \
+  libjpeg-dev \
+  libcairo2-dev \
+  libxt-dev \
+  libfribidi-dev \
+  libharfbuzz-dev \
+  libgit2-dev \
+  # Database / ODBC (RPostgres, RSQLite, RODBC/odbc)
+  libpq-dev \
+  libsqlite3-dev \
+  unixodbc-dev \
+  # Neovim / LazyVim CLI deps
+  ripgrep \
+  fd-find \
+  unzip \
+  # Yazi required + recommended optional deps (per yazi-rs.github.io/docs/installation)
+  file \
+  p7zip-full \
+  jq \
+  poppler-utils \
+  imagemagick \
+  unar \
+  # Terminfo (ghostty + many others) for SSH terminal compatibility
+  ncurses-term \
+  # clear command
+  ncurses-bin \
+  # General utilities
+  pandoc \
+  git \
+  rsync \
+  # (tmux is NOT installed from apt — built from source in Stage 8g below,
+  #  because 24.04 pins tmux 3.4 which is too old for ghostty's CSI-u keys.)
+  nano \
+  vim \
+  wget \
+  curl \
+  openssh-client \
+  man-db \
+  less \
+  zsh && \
+  locale-gen en_US.UTF-8 && \
+  # ALSO compile en_US.UTF-8 in DIRECTORY form. Under udocker/F3, glibc's
+  # setlocale() opens its data through internal calls libfakechroot cannot
+  # interpose, so it reads the RHEL7 HOST /usr/lib/locale and every process
+  # silently falls back to the C locale (zsh then measures multibyte glyphs
+  # by the byte). The cure is LOCPATH pointed at the ROOT by host path (set
+  # by udocker_dev.sh + /etc/zsh/zshrc), and LOCPATH disables the
+  # locale-archive that locale-gen writes into — hence the directory copy.
+  mkdir -p /usr/lib/locale/en_US.UTF-8 && \
+  localedef -i en_US -f UTF-8 /usr/lib/locale/en_US.UTF-8 && \
+  usermod -s /bin/zsh root && \
+  rm -rf /var/lib/apt/lists/*
 
 # Note: ghostty terminfo is not shipped here. ghostty generates it from Zig
 # source at build time, so there is no raw file to fetch. After deploying the
@@ -210,23 +221,23 @@ RUN apt-get update && \
 
 # ─── Stage 2: Node.js 24 LTS (for Mason / LSP servers) ──────────────────────
 RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
-    apt-get install -y nodejs && \
-    rm -rf /var/lib/apt/lists/*
+  apt-get install -y nodejs && \
+  rm -rf /var/lib/apt/lists/*
 
 # ─── Stage 3: Python 3.13 via deadsnakes (env defaults to this, not 3.12) ───
 # /usr/local/bin precedes /usr/bin in PATH, so the symlinks below make
 # `python` and `python3` resolve to 3.13 even though Ubuntu's 3.12 stays installed.
 RUN add-apt-repository -y ppa:deadsnakes/ppa && \
-    apt-get update && \
-    apt-get install -y \
-        python3.13 \
-        python3.13-dev \
-        python3.13-venv && \
-    rm -rf /var/lib/apt/lists/* && \
-    ln -sf /usr/bin/python3.13 /usr/local/bin/python3 && \
-    ln -sf /usr/bin/python3.13 /usr/local/bin/python && \
-    python3.13 -m ensurepip --upgrade && \
-    python3.13 -m pip install --upgrade pip setuptools wheel
+  apt-get update && \
+  apt-get install -y \
+  python3.13 \
+  python3.13-dev \
+  python3.13-venv && \
+  rm -rf /var/lib/apt/lists/* && \
+  ln -sf /usr/bin/python3.13 /usr/local/bin/python3 && \
+  ln -sf /usr/bin/python3.13 /usr/local/bin/python && \
+  python3.13 -m ensurepip --upgrade && \
+  python3.13 -m pip install --upgrade pip setuptools wheel
 
 # Env vars so downstream tools (R reticulate, uv, LSPs, etc.) pick 3.13
 ENV PYTHON=/usr/local/bin/python3
@@ -236,14 +247,14 @@ ENV UV_PYTHON=/usr/local/bin/python3
 
 # ─── Stage 4: uv (Astral) — fast Python package + project manager ───────────
 RUN UV_VERSION=${UV_VERSION} && \
-    echo "Installing uv ${UV_VERSION}" && \
-    curl -L "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" \
-        -o /tmp/uv.tar.gz && \
-    tar -C /tmp -xzf /tmp/uv.tar.gz && \
-    mv /tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv && \
-    mv /tmp/uv-x86_64-unknown-linux-gnu/uvx /usr/local/bin/uvx && \
-    chmod +x /usr/local/bin/uv /usr/local/bin/uvx && \
-    rm -rf /tmp/uv.tar.gz /tmp/uv-x86_64-unknown-linux-gnu
+  echo "Installing uv ${UV_VERSION}" && \
+  curl -L "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" \
+  -o /tmp/uv.tar.gz && \
+  tar -C /tmp -xzf /tmp/uv.tar.gz && \
+  mv /tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv && \
+  mv /tmp/uv-x86_64-unknown-linux-gnu/uvx /usr/local/bin/uvx && \
+  chmod +x /usr/local/bin/uv /usr/local/bin/uvx && \
+  rm -rf /tmp/uv.tar.gz /tmp/uv-x86_64-unknown-linux-gnu
 
 # ─── Stage 5: R 4.x (CRAN noble-cran40) + tidyverse build dependencies ──────
 # Installs R base + dev headers.  The system libraries required to compile core
@@ -253,20 +264,20 @@ RUN UV_VERSION=${UV_VERSION} && \
 # The packages below cover the remaining tidyverse / crypto deps:
 #   libsodium-dev    → sodium, openssl
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        libsodium-dev && \
-    rm -rf /var/lib/apt/lists/* && \
-    mkdir -p /etc/apt/keyrings && \
-    wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc \
-        | gpg --dearmor -o /etc/apt/keyrings/cran.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/cran.gpg] \
-https://cloud.r-project.org/bin/linux/ubuntu noble-cran40/" \
-        > /etc/apt/sources.list.d/cran.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-        r-base \
-        r-base-dev && \
-    rm -rf /var/lib/apt/lists/*
+  apt-get install -y --no-install-recommends \
+  libsodium-dev && \
+  rm -rf /var/lib/apt/lists/* && \
+  mkdir -p /etc/apt/keyrings && \
+  wget -qO- https://cloud.r-project.org/bin/linux/ubuntu/marutter_pubkey.asc \
+  | gpg --dearmor -o /etc/apt/keyrings/cran.gpg && \
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/cran.gpg] \
+  https://cloud.r-project.org/bin/linux/ubuntu noble-cran40/" \
+  > /etc/apt/sources.list.d/cran.list && \
+  apt-get update && \
+  apt-get install -y --no-install-recommends \
+  r-base \
+  r-base-dev && \
+  rm -rf /var/lib/apt/lists/*
 
 # ─── Stage 5b: Posit Package Manager (PPM) as default R repo ────────────────
 # PPM ships precompiled binary packages for Ubuntu Noble, so install.packages()
@@ -276,23 +287,23 @@ https://cloud.r-project.org/bin/linux/ubuntu noble-cran40/" \
 #
 # Rolling "latest" channel — change to a YYYY-MM-DD date for reproducible builds.
 RUN mkdir -p /etc/R && \
-    cat > /etc/R/Rprofile.site << 'EOF'
+  cat > /etc/R/Rprofile.site << 'EOF'
 # /etc/R/Rprofile.site — sourced on every R startup (system-wide).
 # Configure the Posit Package Manager (PPM) as the default CRAN mirror so that
 # install.packages() pulls Linux binary builds for Ubuntu Noble.
 local({
-  ppm <- "https://packagemanager.posit.co/cran/__linux__/noble/latest"
-  r <- getOption("repos")
-  r["CRAN"] <- ppm
-  options(repos = r)
+ppm <- "https://packagemanager.posit.co/cran/__linux__/noble/latest"
+r <- getOption("repos")
+r["CRAN"] <- ppm
+options(repos = r)
 
-  # PPM serves binary packages only to clients whose User-Agent identifies the
-  # platform.  R's default UA omits the OS, so PPM falls back to source tarballs.
-  options(HTTPUserAgent = sprintf(
-    "R/%s R (%s)",
-    getRversion(),
-    paste(getRversion(), R.version$platform, R.version$arch, R.version$os)
-  ))
+# PPM serves binary packages only to clients whose User-Agent identifies the
+# platform.  R's default UA omits the OS, so PPM falls back to source tarballs.
+options(HTTPUserAgent = sprintf(
+"R/%s R (%s)",
+getRversion(),
+paste(getRversion(), R.version$platform, R.version$arch, R.version$os)
+))
 })
 EOF
 
@@ -312,25 +323,25 @@ EOF
 # nvim config (configs/nvim/lua/plugins/r.lua) sets `mason = false` on
 # r_language_server so the LSP uses THIS system copy instead of Mason.
 RUN Rscript -e 'install.packages("languageserver")' && \
-    Rscript -e 'if (!requireNamespace("languageserver", quietly = TRUE)) quit(status = 1)' && \
-    echo "languageserver $(Rscript -e 'cat(as.character(packageVersion("languageserver")))') installed into $(Rscript -e 'cat(find.package("languageserver"))')"
+  Rscript -e 'if (!requireNamespace("languageserver", quietly = TRUE)) quit(status = 1)' && \
+  echo "languageserver $(Rscript -e 'cat(as.character(packageVersion("languageserver")))') installed into $(Rscript -e 'cat(find.package("languageserver"))')"
 
 # ─── Stage 5c: Quarto (scientific publishing — .qmd → PDF/HTML/Word) ────────
 # Quarto bundles its own pandoc and Deno runtime.  LaTeX for PDF output is
 # provided by Stage 5d (TinyTeX) below.
 RUN QUARTO_VERSION=${QUARTO_VERSION} && \
-    echo "Installing Quarto ${QUARTO_VERSION}" && \
-    curl -L "https://github.com/quarto-dev/quarto-cli/releases/download/v${QUARTO_VERSION}/quarto-${QUARTO_VERSION}-linux-amd64.tar.gz" \
-        -o /tmp/quarto.tar.gz && \
-    mkdir -p /opt/quarto && \
-    tar -C /opt/quarto --strip-components=1 -xzf /tmp/quarto.tar.gz && \
-    # NOT a symlink: quarto's launcher resolves its install root from the script
-    # path and gets it wrong via a symlink (looks for tools/deno + version under
-    # /usr/local/…). A wrapper exec's the real binary so it finds /opt/quarto.
-    printf '#!/bin/sh\nexec /opt/quarto/bin/quarto "$@"\n' > /usr/local/bin/quarto && \
-    chmod +x /usr/local/bin/quarto && \
-    rm /tmp/quarto.tar.gz && \
-    /usr/local/bin/quarto --version
+  echo "Installing Quarto ${QUARTO_VERSION}" && \
+  curl -L "https://github.com/quarto-dev/quarto-cli/releases/download/v${QUARTO_VERSION}/quarto-${QUARTO_VERSION}-linux-amd64.tar.gz" \
+  -o /tmp/quarto.tar.gz && \
+  mkdir -p /opt/quarto && \
+  tar -C /opt/quarto --strip-components=1 -xzf /tmp/quarto.tar.gz && \
+  # NOT a symlink: quarto's launcher resolves its install root from the script
+  # path and gets it wrong via a symlink (looks for tools/deno + version under
+  # /usr/local/…). A wrapper exec's the real binary so it finds /opt/quarto.
+  printf '#!/bin/sh\nexec /opt/quarto/bin/quarto "$@"\n' > /usr/local/bin/quarto && \
+  chmod +x /usr/local/bin/quarto && \
+  rm /tmp/quarto.tar.gz && \
+  /usr/local/bin/quarto --version
 
 # ─── Stage 5d: TinyTeX (LaTeX for Quarto / RMarkdown / VimTeX PDF output) ───
 # Direct tarball install — no R/Rscript dependency.  Pulls the same prebuilt
@@ -363,28 +374,28 @@ RUN QUARTO_VERSION=${QUARTO_VERSION} && \
 #   tlmgr --usermode install <pkg>
 # Or rebuild the container with the package appended to the tlmgr install line.
 RUN rm -rf /opt/TinyTeX && \
-    TINYTEX_TAG=${TINYTEX_TAG} && \
-    echo "Installing TinyTeX ${TINYTEX_TAG} (default bundle, linux-x86_64)" && \
-    curl -fL "https://github.com/rstudio/tinytex-releases/releases/download/${TINYTEX_TAG}/TinyTeX-linux-x86_64-${TINYTEX_TAG}.tar.xz" \
-        -o /tmp/tinytex.tar.xz && \
-    mkdir -p /opt/TinyTeX && \
-    tar -C /opt/TinyTeX --strip-components=1 -xJf /tmp/tinytex.tar.xz && \
-    rm /tmp/tinytex.tar.xz && \
-    /opt/TinyTeX/bin/x86_64-linux/tlmgr option sys_bin /usr/local/bin && \
-    /opt/TinyTeX/bin/x86_64-linux/tlmgr path add && \
-    # The bundled tlmgr (texlive.infra) is often older than the revision on the
-    # repo (tlnet.yihui.org), and tlmgr then HARD-REFUSES every `install` with
-    # "tlmgr itself needs to be updated".  Self-update first so installs proceed.
-    # (gnupg from Stage 1 lets tlmgr verify the repo signature.)
-    /opt/TinyTeX/bin/x86_64-linux/tlmgr update --self && \
-    /opt/TinyTeX/bin/x86_64-linux/tlmgr install \
-        collection-latexrecommended \
-        collection-fontsrecommended \
-        biber \
-        biblatex && \
-    /opt/TinyTeX/bin/x86_64-linux/tlmgr path add && \
-    /usr/local/bin/latexmk --version >/dev/null && \
-    /usr/local/bin/pdflatex --version | head -1
+  TINYTEX_TAG=${TINYTEX_TAG} && \
+  echo "Installing TinyTeX ${TINYTEX_TAG} (default bundle, linux-x86_64)" && \
+  curl -fL "https://github.com/rstudio/tinytex-releases/releases/download/${TINYTEX_TAG}/TinyTeX-linux-x86_64-${TINYTEX_TAG}.tar.xz" \
+  -o /tmp/tinytex.tar.xz && \
+  mkdir -p /opt/TinyTeX && \
+  tar -C /opt/TinyTeX --strip-components=1 -xJf /tmp/tinytex.tar.xz && \
+  rm /tmp/tinytex.tar.xz && \
+  /opt/TinyTeX/bin/x86_64-linux/tlmgr option sys_bin /usr/local/bin && \
+  /opt/TinyTeX/bin/x86_64-linux/tlmgr path add && \
+  # The bundled tlmgr (texlive.infra) is often older than the revision on the
+  # repo (tlnet.yihui.org), and tlmgr then HARD-REFUSES every `install` with
+  # "tlmgr itself needs to be updated".  Self-update first so installs proceed.
+  # (gnupg from Stage 1 lets tlmgr verify the repo signature.)
+  /opt/TinyTeX/bin/x86_64-linux/tlmgr update --self && \
+  /opt/TinyTeX/bin/x86_64-linux/tlmgr install \
+  collection-latexrecommended \
+  collection-fontsrecommended \
+  biber \
+  biblatex && \
+  /opt/TinyTeX/bin/x86_64-linux/tlmgr path add && \
+  /usr/local/bin/latexmk --version >/dev/null && \
+  /usr/local/bin/pdflatex --version | head -1
 
 # ─── Stage 5e: PDF render fonts (for bookokrat) ─────────────────────────────
 # bookokrat (Stage 5f) renders PDF text via MuPDF, which falls back to system
@@ -393,10 +404,10 @@ RUN rm -rf /opt/TinyTeX && \
 # in-terminal via the kitty graphics protocol, so unlike the old sioyek viewer
 # it needs no X server (and no XQuartz on the Mac).
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        fontconfig \
-        fonts-dejavu-core && \
-    rm -rf /var/lib/apt/lists/*
+  apt-get install -y --no-install-recommends \
+  fontconfig \
+  fonts-dejavu-core && \
+  rm -rf /var/lib/apt/lists/*
 
 # ─── Stage 5f: bookokrat (primary terminal PDF/EPUB viewer) ─────────────────
 # Terminal reader that draws PDFs inline via the kitty graphics protocol, which
@@ -405,16 +416,16 @@ RUN apt-get update && \
 # x86_64 gnu binary from upstream releases; the synctex wrapper scripts
 # (bookokrat-forward/-split/-inverse) ship via sync_configs.sh into ~/.local/bin.
 RUN BOOKOKRAT_VERSION=${BOOKOKRAT_VERSION} && \
-    echo "Installing bookokrat ${BOOKOKRAT_VERSION}" && \
-    curl -fL "https://github.com/bugzmanov/bookokrat/releases/download/${BOOKOKRAT_VERSION}/bookokrat-${BOOKOKRAT_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
-        -o /tmp/bookokrat.tar.gz && \
-    mkdir -p /tmp/bookokrat-x && \
-    tar -C /tmp/bookokrat-x -xzf /tmp/bookokrat.tar.gz && \
-    BK_BIN="$(find /tmp/bookokrat-x -type f -name bookokrat | head -1)" && \
-    { [ -n "$BK_BIN" ] || { echo "ERROR: bookokrat binary missing in tarball" >&2; exit 1; }; } && \
-    install -m 0755 "$BK_BIN" /usr/local/bin/bookokrat && \
-    rm -rf /tmp/bookokrat.tar.gz /tmp/bookokrat-x && \
-    /usr/local/bin/bookokrat --version
+  echo "Installing bookokrat ${BOOKOKRAT_VERSION}" && \
+  curl -fL "https://github.com/bugzmanov/bookokrat/releases/download/${BOOKOKRAT_VERSION}/bookokrat-${BOOKOKRAT_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+  -o /tmp/bookokrat.tar.gz && \
+  mkdir -p /tmp/bookokrat-x && \
+  tar -C /tmp/bookokrat-x -xzf /tmp/bookokrat.tar.gz && \
+  BK_BIN="$(find /tmp/bookokrat-x -type f -name bookokrat | head -1)" && \
+  { [ -n "$BK_BIN" ] || { echo "ERROR: bookokrat binary missing in tarball" >&2; exit 1; }; } && \
+  install -m 0755 "$BK_BIN" /usr/local/bin/bookokrat && \
+  rm -rf /tmp/bookokrat.tar.gz /tmp/bookokrat-x && \
+  /usr/local/bin/bookokrat --version
 
 # ─── Stage 6: Neovim (latest stable release binary, x86_64) ─────────────────
 # NVIM_VERSION=latest (the default) resolves through GitHub's /releases/latest
@@ -423,23 +434,23 @@ RUN BOOKOKRAT_VERSION=${BOOKOKRAT_VERSION} && \
 # `curl -f` so an unknown tag fails the build loudly rather than taring up a 404
 # page, and the installed version is echoed for the build log.
 RUN if [ "${NVIM_VERSION}" = "latest" ]; then \
-        NVIM_URL="https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz"; \
-    else \
-        NVIM_URL="https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/nvim-linux-x86_64.tar.gz"; \
-    fi && \
-    echo "Installing Neovim ${NVIM_VERSION} from ${NVIM_URL}" && \
-    curl -fL "${NVIM_URL}" -o /tmp/nvim.tar.gz && \
-    tar -C /usr/local --strip-components=1 -xzf /tmp/nvim.tar.gz && \
-    rm /tmp/nvim.tar.gz && \
-    /usr/local/bin/nvim --version | head -1
+  NVIM_URL="https://github.com/neovim/neovim/releases/latest/download/nvim-linux-x86_64.tar.gz"; \
+  else \
+  NVIM_URL="https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/nvim-linux-x86_64.tar.gz"; \
+  fi && \
+  echo "Installing Neovim ${NVIM_VERSION} from ${NVIM_URL}" && \
+  curl -fL "${NVIM_URL}" -o /tmp/nvim.tar.gz && \
+  tar -C /usr/local --strip-components=1 -xzf /tmp/nvim.tar.gz && \
+  rm /tmp/nvim.tar.gz && \
+  /usr/local/bin/nvim --version | head -1
 
 # ─── Stage 7: lazygit (LazyVim git UI) ──────────────────────────────────────
 RUN LAZYGIT_VERSION=${LAZYGIT_VERSION} && \
-    echo "Installing lazygit ${LAZYGIT_VERSION}" && \
-    curl -L "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_Linux_x86_64.tar.gz" \
-        -o /tmp/lazygit.tar.gz && \
-    tar -C /usr/local/bin -xzf /tmp/lazygit.tar.gz lazygit && \
-    rm /tmp/lazygit.tar.gz
+  echo "Installing lazygit ${LAZYGIT_VERSION}" && \
+  curl -L "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_Linux_x86_64.tar.gz" \
+  -o /tmp/lazygit.tar.gz && \
+  tar -C /usr/local/bin -xzf /tmp/lazygit.tar.gz lazygit && \
+  rm /tmp/lazygit.tar.gz
 
 # ─── Stage 7b: static git bundle (host-runnable, for lazygit's escape) ──────
 # Built in the `gitstatic` Alpine stage at the top. lazygit (Go) spawns `git`
@@ -457,23 +468,23 @@ COPY --from=gitstatic /opt/git-static /opt/git-static
 
 # ─── Stage 8: Yazi terminal file manager ────────────────────────────────────
 RUN YAZI_VERSION=${YAZI_VERSION} && \
-    echo "Installing Yazi ${YAZI_VERSION}" && \
-    curl -L "https://github.com/sxyazi/yazi/releases/download/${YAZI_VERSION}/yazi-x86_64-unknown-linux-gnu.zip" \
-        -o /tmp/yazi.zip && \
-    unzip -o /tmp/yazi.zip -d /tmp/yazi_extracted && \
-    cp /tmp/yazi_extracted/yazi-x86_64-unknown-linux-gnu/yazi /usr/local/bin/yazi && \
-    cp /tmp/yazi_extracted/yazi-x86_64-unknown-linux-gnu/ya    /usr/local/bin/ya && \
-    chmod +x /usr/local/bin/yazi /usr/local/bin/ya && \
-    rm -rf /tmp/yazi.zip /tmp/yazi_extracted
+  echo "Installing Yazi ${YAZI_VERSION}" && \
+  curl -L "https://github.com/sxyazi/yazi/releases/download/${YAZI_VERSION}/yazi-x86_64-unknown-linux-gnu.zip" \
+  -o /tmp/yazi.zip && \
+  unzip -o /tmp/yazi.zip -d /tmp/yazi_extracted && \
+  cp /tmp/yazi_extracted/yazi-x86_64-unknown-linux-gnu/yazi /usr/local/bin/yazi && \
+  cp /tmp/yazi_extracted/yazi-x86_64-unknown-linux-gnu/ya    /usr/local/bin/ya && \
+  chmod +x /usr/local/bin/yazi /usr/local/bin/ya && \
+  rm -rf /tmp/yazi.zip /tmp/yazi_extracted
 
 # ─── Stage 8b: resvg (Yazi SVG preview) ─────────────────────────────────────
 RUN RESVG_VERSION=${RESVG_VERSION} && \
-    echo "Installing resvg ${RESVG_VERSION}" && \
-    curl -L "https://github.com/linebender/resvg/releases/download/v${RESVG_VERSION}/resvg-linux-x86_64.tar.gz" \
-        -o /tmp/resvg.tar.gz && \
-    tar -C /usr/local/bin -xzf /tmp/resvg.tar.gz resvg && \
-    chmod +x /usr/local/bin/resvg && \
-    rm /tmp/resvg.tar.gz
+  echo "Installing resvg ${RESVG_VERSION}" && \
+  curl -L "https://github.com/linebender/resvg/releases/download/v${RESVG_VERSION}/resvg-linux-x86_64.tar.gz" \
+  -o /tmp/resvg.tar.gz && \
+  tar -C /usr/local/bin -xzf /tmp/resvg.tar.gz resvg && \
+  chmod +x /usr/local/bin/resvg && \
+  rm /tmp/resvg.tar.gz
 
 # ─── Stage 8c: fzf + zoxide (pinned from GitHub — STATIC) ───────────────────
 # From GitHub releases, not apt: this pins current versions AND ships STATIC
@@ -485,62 +496,91 @@ RUN RESVG_VERSION=${RESVG_VERSION} && \
 # path. fzf itself no longer shells out to fd for file lists — it uses its
 # built-in walker (see zshenv below) — so fd stays the plain apt build.
 RUN FZF_VERSION=${FZF_VERSION} && \
-    echo "Installing fzf ${FZF_VERSION}" && \
-    curl -L "https://github.com/junegunn/fzf/releases/download/v${FZF_VERSION}/fzf-${FZF_VERSION}-linux_amd64.tar.gz" \
-        -o /tmp/fzf.tar.gz && \
-    tar -C /usr/local/bin -xzf /tmp/fzf.tar.gz fzf && \
-    chmod +x /usr/local/bin/fzf && \
-    rm /tmp/fzf.tar.gz
+  echo "Installing fzf ${FZF_VERSION}" && \
+  curl -L "https://github.com/junegunn/fzf/releases/download/v${FZF_VERSION}/fzf-${FZF_VERSION}-linux_amd64.tar.gz" \
+  -o /tmp/fzf.tar.gz && \
+  tar -C /usr/local/bin -xzf /tmp/fzf.tar.gz fzf && \
+  chmod +x /usr/local/bin/fzf && \
+  rm /tmp/fzf.tar.gz
 RUN ZOXIDE_VERSION=${ZOXIDE_VERSION} && \
-    echo "Installing zoxide ${ZOXIDE_VERSION}" && \
-    curl -L "https://github.com/ajeetdsouza/zoxide/releases/download/v${ZOXIDE_VERSION}/zoxide-${ZOXIDE_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
-        -o /tmp/zoxide.tar.gz && \
-    tar -C /usr/local/bin -xzf /tmp/zoxide.tar.gz zoxide && \
-    chmod +x /usr/local/bin/zoxide && \
-    rm /tmp/zoxide.tar.gz
+  echo "Installing zoxide ${ZOXIDE_VERSION}" && \
+  curl -L "https://github.com/ajeetdsouza/zoxide/releases/download/v${ZOXIDE_VERSION}/zoxide-${ZOXIDE_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+  -o /tmp/zoxide.tar.gz && \
+  tar -C /usr/local/bin -xzf /tmp/zoxide.tar.gz zoxide && \
+  chmod +x /usr/local/bin/zoxide && \
+  rm /tmp/zoxide.tar.gz
 
 # ─── Stage 8e: bottom (process/system monitor — replaces htop) ───────────────
 RUN BOTTOM_VERSION=${BOTTOM_VERSION} && \
-    echo "Installing bottom ${BOTTOM_VERSION}" && \
-    curl -L "https://github.com/ClementTsang/bottom/releases/download/${BOTTOM_VERSION}/bottom_x86_64-unknown-linux-gnu.tar.gz" \
-        -o /tmp/bottom.tar.gz && \
-    tar -C /usr/local/bin -xzf /tmp/bottom.tar.gz btm && \
-    chmod +x /usr/local/bin/btm && \
-    rm /tmp/bottom.tar.gz
+  echo "Installing bottom ${BOTTOM_VERSION}" && \
+  curl -L "https://github.com/ClementTsang/bottom/releases/download/${BOTTOM_VERSION}/bottom_x86_64-unknown-linux-gnu.tar.gz" \
+  -o /tmp/bottom.tar.gz && \
+  tar -C /usr/local/bin -xzf /tmp/bottom.tar.gz btm && \
+  chmod +x /usr/local/bin/btm && \
+  rm /tmp/bottom.tar.gz
 
 # ─── Stage 8f: catppuccin/tmux theme (status bar) ───────────────────────────
 # tmux status-bar theme, baked into the image so the container's bar matches the
 # Mac's. configs/tmux/tmux.conf sources it directly from this path (no TPM, no
 # ~/.config plugin clone — keeps it on the fast rootfs, not the FUSE home).
 RUN CATPPUCCIN_TMUX_VERSION=${CATPPUCCIN_TMUX_VERSION} && \
-    echo "Installing catppuccin/tmux ${CATPPUCCIN_TMUX_VERSION}" && \
-    mkdir -p /usr/local/share/tmux-plugins/catppuccin && \
-    curl -fL "https://github.com/catppuccin/tmux/archive/refs/tags/${CATPPUCCIN_TMUX_VERSION}.tar.gz" \
-        -o /tmp/catppuccin-tmux.tar.gz && \
-    tar -C /usr/local/share/tmux-plugins/catppuccin --strip-components=1 -xzf /tmp/catppuccin-tmux.tar.gz && \
-    rm /tmp/catppuccin-tmux.tar.gz && \
-    { [ -f /usr/local/share/tmux-plugins/catppuccin/catppuccin.tmux ] || { echo "ERROR: catppuccin.tmux missing after extract" >&2; exit 1; }; }
+  echo "Installing catppuccin/tmux ${CATPPUCCIN_TMUX_VERSION}" && \
+  mkdir -p /usr/local/share/tmux-plugins/catppuccin && \
+  curl -fL "https://github.com/catppuccin/tmux/archive/refs/tags/${CATPPUCCIN_TMUX_VERSION}.tar.gz" \
+  -o /tmp/catppuccin-tmux.tar.gz && \
+  tar -C /usr/local/share/tmux-plugins/catppuccin --strip-components=1 -xzf /tmp/catppuccin-tmux.tar.gz && \
+  rm /tmp/catppuccin-tmux.tar.gz && \
+  { [ -f /usr/local/share/tmux-plugins/catppuccin/catppuccin.tmux ] || { echo "ERROR: catppuccin.tmux missing after extract" >&2; exit 1; }; }
 
-# ─── tmux session persistence: resurrect + continuum ────────────────────────
+# ─── tmux session persistence: resurrect (+ continuum, parked) ──────────────
 # Same treatment as catppuccin: extracted to /usr/local/share/tmux-plugins and
 # sourced directly by configs/tmux/tmux.conf, so no TPM and no plugin clone on
-# the slow network home. continuum arms the autosave timer and delegates the
-# actual save/restore to resurrect, so both must be present or neither works.
+# the slow network home. Only resurrect is sourced there — save and restore are
+# manual (prefix Ctrl-s / Ctrl-r). continuum, which arms the autosave timer and
+# the auto-restore-on-start hook, is still installed but left unsourced: keeping
+# it in the image makes re-enabling autosave a config edit, not a rebuild.
 # Saved state still lives on $HOME (see @resurrect-dir in tmux.conf) — that is
 # deliberate, so a layout survives the compute node changing.
 RUN set -eu; \
-    for p in "tmux-resurrect:${TMUX_RESURRECT_VERSION}:resurrect.tmux" \
-             "tmux-continuum:${TMUX_CONTINUUM_VERSION}:continuum.tmux"; do \
-        name="${p%%:*}"; rest="${p#*:}"; ver="${rest%%:*}"; entry="${rest#*:}"; \
-        echo "Installing tmux-plugins/${name} ${ver}"; \
-        mkdir -p "/usr/local/share/tmux-plugins/${name}"; \
-        curl -fL "https://github.com/tmux-plugins/${name}/archive/refs/tags/${ver}.tar.gz" \
-            -o /tmp/tmux-plugin.tar.gz; \
-        tar -C "/usr/local/share/tmux-plugins/${name}" --strip-components=1 -xzf /tmp/tmux-plugin.tar.gz; \
-        rm /tmp/tmux-plugin.tar.gz; \
-        [ -f "/usr/local/share/tmux-plugins/${name}/${entry}" ] \
-            || { echo "ERROR: ${entry} missing after extract" >&2; exit 1; }; \
-    done
+  for p in "tmux-resurrect:${TMUX_RESURRECT_VERSION}:resurrect.tmux" \
+  "tmux-continuum:${TMUX_CONTINUUM_VERSION}:continuum.tmux"; do \
+  name="${p%%:*}"; rest="${p#*:}"; ver="${rest%%:*}"; entry="${rest#*:}"; \
+  echo "Installing tmux-plugins/${name} ${ver}"; \
+  mkdir -p "/usr/local/share/tmux-plugins/${name}"; \
+  curl -fL "https://github.com/tmux-plugins/${name}/archive/refs/tags/${ver}.tar.gz" \
+  -o /tmp/tmux-plugin.tar.gz; \
+  tar -C "/usr/local/share/tmux-plugins/${name}" --strip-components=1 -xzf /tmp/tmux-plugin.tar.gz; \
+  rm /tmp/tmux-plugin.tar.gz; \
+  [ -f "/usr/local/share/tmux-plugins/${name}/${entry}" ] \
+  || { echo "ERROR: ${entry} missing after extract" >&2; exit 1; }; \
+  done
+
+# ─── Patch resurrect: panes must restore in their saved directory ────────────
+# Upstream (tmux-plugins/tmux-resurrect) writes one TAB-delimited record per
+# pane and reads it back with `IFS=$'\t' read`. TAB is an IFS *whitespace*
+# character, so the shell collapses runs of it and drops empty fields. Any pane
+# whose title happens to be empty therefore loses a field, every later column
+# shifts left, and `dir` ends up holding pane_active ("1") — restore.sh then has
+# no directory for `new-window -c` and the pane opens in whatever cwd the
+# restore inherited, i.e. $HOME. Reproduced and verified on the Mac.
+#
+# The fix is the author's own idiom, just never applied to pane_title:
+# window_flags and pane_current_path are already written ":#{...}" so the field
+# can never be empty, and the ":" is stripped on read.
+#
+# Kept identical to 02_dotfiles/patches/tmux-resurrect-empty-title.sh, which
+# does the same to the TPM copy on the Mac. Both must move together.
+# The verification below fails the build if upstream changes these lines, rather
+# than letting the patch silently no-op and the bug come back.
+RUN set -eu; \
+  S=/usr/local/share/tmux-plugins/tmux-resurrect/scripts/save.sh; \
+  R=/usr/local/share/tmux-plugins/tmux-resurrect/scripts/restore.sh; \
+  sed -i 's|^\tformat+="#{pane_title}"$|\tformat+=":#{pane_title}"|' "$S"; \
+  sed -i 's|-T "$pane_title"|-T "${pane_title#:}"|' "$R"; \
+  grep -q 'format+=":#{pane_title}"' "$S" \
+  || { echo "ERROR: resurrect save.sh pane_title patch did not apply" >&2; exit 1; }; \
+  grep -q 'pane_title#:' "$R" \
+  || { echo "ERROR: resurrect restore.sh pane_title patch did not apply" >&2; exit 1; }
 
 # ─── Stage 8g: tmux built from source (newer than Ubuntu 24.04's apt 3.4) ────
 # Ubuntu 24.04 pins tmux 3.4, which predates modern terminals' CSI-u extended-key
@@ -554,15 +594,15 @@ RUN set -eu; \
 # (left in place — purging the -dev pkgs would also drop tmux's runtime libevent).
 ARG TMUX_VERSION=3.6b
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libevent-dev libncurses-dev bison pkg-config && \
-    curl -fL "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz" \
-        -o /tmp/tmux.tar.gz && \
-    tar -xzf /tmp/tmux.tar.gz -C /tmp && \
-    cd "/tmp/tmux-${TMUX_VERSION}" && \
-    ./configure --prefix=/usr/local && make -j"$(nproc)" && make install && \
-    cd / && rm -rf /tmp/tmux* && \
-    rm -rf /var/lib/apt/lists/* && \
-    tmux -V && [ "$(command -v tmux)" = "/usr/local/bin/tmux" ]
+  libevent-dev libncurses-dev bison pkg-config && \
+  curl -fL "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz" \
+  -o /tmp/tmux.tar.gz && \
+  tar -xzf /tmp/tmux.tar.gz -C /tmp && \
+  cd "/tmp/tmux-${TMUX_VERSION}" && \
+  ./configure --prefix=/usr/local && make -j"$(nproc)" && make install && \
+  cd / && rm -rf /tmp/tmux* && \
+  rm -rf /var/lib/apt/lists/* && \
+  tmux -V && [ "$(command -v tmux)" = "/usr/local/bin/tmux" ]
 
 # ─── Stage 8h: ghostty terminfo (xterm-ghostty) ──────────────────────────────
 # Bake ghostty's OWN terminfo so connect_nvim.sh can pass the real
@@ -574,8 +614,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # from ncurses-bin (Stage 1).
 COPY configs/terminfo/xterm-ghostty.src /tmp/xterm-ghostty.src
 RUN tic -x -o /usr/share/terminfo /tmp/xterm-ghostty.src && \
-    rm /tmp/xterm-ghostty.src && \
-    infocmp xterm-ghostty >/dev/null && echo "xterm-ghostty terminfo installed"
+  rm /tmp/xterm-ghostty.src && \
+  infocmp xterm-ghostty >/dev/null && echo "xterm-ghostty terminfo installed"
 
 # NOTE: no glibc-matched libfakechroot is baked in for udocker's F3 mode. Under
 # F3, glibc NSS getpwuid() can't resolve our uid, so id/whoami show a bare number
@@ -589,14 +629,14 @@ RUN tic -x -o /usr/share/terminfo /tmp/xterm-ghostty.src && \
 
 # ─── Stage 10: GitHub CLI ────────────────────────────────────────────────────
 RUN mkdir -p -m 755 /etc/apt/keyrings && \
-    wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-        | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null && \
-    chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-        | tee /etc/apt/sources.list.d/github-cli.list && \
-    apt-get update && \
-    apt-get install -y gh && \
-    rm -rf /var/lib/apt/lists/*
+  wget -qO- https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+  | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null && \
+  chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+  | tee /etc/apt/sources.list.d/github-cli.list && \
+  apt-get update && \
+  apt-get install -y gh && \
+  rm -rf /var/lib/apt/lists/*
 
 
 # ─── (removed) SLURM client passthrough ─────────────────────────────────────
@@ -629,9 +669,18 @@ RUN mkdir -p -m 755 /etc/apt/keyrings && \
 # and prints an alarming crash report mid-build. Ask npm instead: it reads the
 # installed package metadata without executing the binary. Native binaries like
 # nvim are fine under emulation — this is specific to Bun.
+#
+# These land in /usr/lib/node_modules, which is BOTH a udocker_dev.sh reaper
+# guard (restored wholesale from the pristine rootfs tar) and one of its
+# _INTERP_DIRS. That pairing is deliberate: the tar carries stock PT_INTERP
+# headers, so a restore un-does F3's loader patch and every binary here stops
+# running until the interpreter sweep puts it back. Install somewhere other
+# than these two trees and you owe _INTERP_DIRS a new row — otherwise the
+# binary works until the first reap and then dies with a GLIBC_PRIVATE
+# relocation error that looks nothing like a missing file.
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-        @github/copilot-language-server tree-sitter-cli && \
-    npm ls -g --depth=0 @anthropic-ai/claude-code || true
+  @github/copilot-language-server tree-sitter-cli && \
+  npm ls -g --depth=0 @anthropic-ai/claude-code || true
 
 # ─── Stage 11a: (removed) claude-auto-retry ──────────────────────────────────
 # Dropped 2026-08-21 at the user's request — no auto-resume when a rate limit is
@@ -666,8 +715,8 @@ ENV XDG_CACHE_HOME=/home/gson/.cache
 # rather than ~/.zshrc, because the home dir is bind-mounted from the host
 # at runtime and overwrites the image's copy.
 RUN ln -sf "$(which fdfind)" /usr/local/bin/fd 2>/dev/null || true && \
-    mkdir -p /etc/zsh && \
-    cat > /etc/zsh/zshenv << 'EOF'
+  mkdir -p /etc/zsh && \
+  cat > /etc/zsh/zshenv << 'EOF'
 # ──────────────────────────────────────────────────────────────────────────────
 # /etc/zsh/zshenv — sourced by EVERY zsh invocation (login, interactive,
 # non-interactive `zsh -c`, scripts).  We keep environment exports here so that
@@ -687,7 +736,7 @@ export PATH="/usr/local/bin:$HOME/.local/bin:$PATH"
 # `tinytex::install_tinytex()`), prepend it so any user-added packages
 # (`tlmgr install <pkg>` on the writable user install) take precedence.
 if [ -d "${HOME}/.TinyTeX/bin/x86_64-linux" ]; then
-    export PATH="${HOME}/.TinyTeX/bin/x86_64-linux:${PATH}"
+export PATH="${HOME}/.TinyTeX/bin/x86_64-linux:${PATH}"
 fi
 
 # ── TeX user tree (no-root package installs) ─────────────────────────────────
@@ -750,13 +799,13 @@ mkdir -p "${XDG_CACHE_HOME}/nvim" 2>/dev/null
 #   mv ~/.local/share/nvim /tmp/${USER}/.local/share/nvim
 #   mv ~/.local/state/nvim /tmp/${USER}/.local/state/nvim
 for _nv_sub in share/nvim state/nvim; do
-    _nv_src="${HOME}/.local/${_nv_sub}"
-    _nv_dst="/tmp/${USER}/.local/${_nv_sub}"
-    mkdir -p "${_nv_dst}" 2>/dev/null
-    mkdir -p "$(dirname "${_nv_src}")" 2>/dev/null
-    if [ -L "${_nv_src}" ] || [ ! -e "${_nv_src}" ]; then
-        ln -sfn "${_nv_dst}" "${_nv_src}" 2>/dev/null
-    fi
+_nv_src="${HOME}/.local/${_nv_sub}"
+_nv_dst="/tmp/${USER}/.local/${_nv_sub}"
+mkdir -p "${_nv_dst}" 2>/dev/null
+mkdir -p "$(dirname "${_nv_src}")" 2>/dev/null
+if [ -L "${_nv_src}" ] || [ ! -e "${_nv_src}" ]; then
+ln -sfn "${_nv_dst}" "${_nv_src}" 2>/dev/null
+fi
 done
 unset _nv_sub _nv_src _nv_dst
 
@@ -797,15 +846,37 @@ alias vim="nvim"
 # offline; the in-container git also backfills blobless partial-clone gaps.
 # (`vi`/`vim` expand to `nvim`, so they get the heal too.)
 nvim() {
-    local _lazy="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy"
-    if [[ -d $_lazy/LazyVim && ! -f $_lazy/LazyVim/README.md ]]; then
-        print -u2 "nvim: repairing /tmp-reaped LazyVim plugin store ..."
-        local _r
-        for _r in $_lazy/*(/N); do
-            [[ -d $_r/.git ]] && command git -C "$_r" checkout -f -q -- . 2>/dev/null
-        done
-    fi
-    command nvim "$@"
+local _lazy="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy"
+if [[ -d $_lazy/LazyVim && ! -f $_lazy/LazyVim/README.md ]]; then
+print -u2 "nvim: repairing /tmp-reaped LazyVim plugin store ..."
+local _r
+for _r in $_lazy/*(/N); do
+[[ -d $_r/.git ]] && command git -C "$_r" checkout -f -q -- . 2>/dev/null
+done
+fi
+
+# ── un-stick an interrupted lazy.nvim clone (NOT the reaper) ─────────────
+# lazy.nvim arms an empty "<plugin-dir>.cloning" marker before cloning and
+# only unlinks it when git exits 0. Interrupt a first install — quit nvim,
+# stall the network — and the marker outlives the clone. core/plugin.lua's
+# update_state() then drops that plugin from the installed set on EVERY
+# startup even though the finished directory is right there, so the clone
+# task wipes the good copy and re-clones, at every launch, forever.
+# A fresh node or fresh ROOT has the whole plugin set doing a first
+# install at once, which is precisely when this is easy to trigger.
+# A resolvable HEAD proves the clone finished, so drop only the marker;
+# if it does not resolve the checkout is genuinely unfinished and lazy's
+# own re-clone is the right answer. Healthy store: one readdir, no git.
+local _m _d
+for _m in $_lazy/*.cloning(N.); do
+_d="${_m%.cloning}"
+[[ -d $_d/.git ]] || continue
+command git -C "$_d" rev-parse --verify --quiet HEAD >/dev/null 2>&1 || continue
+print -u2 "nvim: clearing stale lazy.nvim clone marker for ${_d:t}"
+rm -f -- "$_m"
+done
+
+command nvim "$@"
 }
 
 # ── yazi shell wrapper ────────────────────────────────────────────────────────
@@ -814,32 +885,32 @@ nvim() {
 # on exit, AND so the `z` key (zoxide --interactive → fzf) gets proper
 # terminal handoff inside the multiplexer.
 function y() {
-    local tmp cwd _sz _cols _rows
-    # Resolve terminal dimensions in priority order:
-    #
-    #   1. stty size — reads TIOCGWINSZ directly from the PTY fd.  Correct for
-    #      tmux panes (tmux sets each pane's PTY size) and for any resize
-    #      (SSH sends TIOCSWINSZ + SIGWINCH on the remote PTY after a resize,
-    #      making TIOCGWINSZ reliable immediately afterwards).
-    #
-    #   2. _SSH_COLS / _SSH_ROWS — injected by connect_nvim.sh from stty size on
-    #      the Mac terminal at connect time.  zsh will NOT overwrite these names
-    #      (unlike $COLUMNS/$LINES, which zsh resets from TIOCGWINSZ during its
-    #      own interactive-init sequence, potentially stamping wrong defaults).
-    #
-    #   3. Hard defaults (80 × 24).
-    _sz=$(stty size 2>/dev/null)        # "rows cols", e.g. "60 220"
-    _cols="${_sz##* }" _rows="${_sz%% *}"
-    (( ${_cols:-0} > 0 && ${_rows:-0} > 0 )) 2>/dev/null || {
-        _cols="${_SSH_COLS:-80}" _rows="${_SSH_ROWS:-24}"
-    }
-    stty cols "$_cols" rows "$_rows" 2>/dev/null
-    tmp="$(mktemp -t "yazi-cwd.XXXXXX")"
-    COLUMNS="$_cols" LINES="$_rows" yazi "$@" --cwd-file="$tmp"
-    if cwd="$(command cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
-        builtin cd -- "$cwd"
-    fi
-    rm -f -- "$tmp"
+local tmp cwd _sz _cols _rows
+# Resolve terminal dimensions in priority order:
+#
+#   1. stty size — reads TIOCGWINSZ directly from the PTY fd.  Correct for
+#      tmux panes (tmux sets each pane's PTY size) and for any resize
+#      (SSH sends TIOCSWINSZ + SIGWINCH on the remote PTY after a resize,
+#      making TIOCGWINSZ reliable immediately afterwards).
+#
+#   2. _SSH_COLS / _SSH_ROWS — injected by connect_nvim.sh from stty size on
+#      the Mac terminal at connect time.  zsh will NOT overwrite these names
+#      (unlike $COLUMNS/$LINES, which zsh resets from TIOCGWINSZ during its
+#      own interactive-init sequence, potentially stamping wrong defaults).
+#
+#   3. Hard defaults (80 × 24).
+_sz=$(stty size 2>/dev/null)        # "rows cols", e.g. "60 220"
+_cols="${_sz##* }" _rows="${_sz%% *}"
+(( ${_cols:-0} > 0 && ${_rows:-0} > 0 )) 2>/dev/null || {
+_cols="${_SSH_COLS:-80}" _rows="${_SSH_ROWS:-24}"
+}
+stty cols "$_cols" rows "$_rows" 2>/dev/null
+tmp="$(mktemp -t "yazi-cwd.XXXXXX")"
+COLUMNS="$_cols" LINES="$_rows" yazi "$@" --cwd-file="$tmp"
+if cwd="$(command cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
+builtin cd -- "$cwd"
+fi
+rm -f -- "$tmp"
 }
 
 # ── SIGWINCH trap: refresh _SSH_COLS/_SSH_ROWS and the kernel PTY record ───────
@@ -847,18 +918,36 @@ function y() {
 # SIGWINCH.  TIOCGWINSZ is then valid; capture the new values into
 # _SSH_COLS/_SSH_ROWS so the next `y` launch uses post-resize dimensions.
 TRAPWINCH() {
-    local _sz
-    _sz=$(stty size 2>/dev/null)
-    _SSH_COLS="${_sz##* }" _SSH_ROWS="${_sz%% *}"
-    (( ${_SSH_COLS:-0} > 0 )) 2>/dev/null || _SSH_COLS="${COLUMNS:-80}"
-    (( ${_SSH_ROWS:-0} > 0 )) 2>/dev/null || _SSH_ROWS="${LINES:-24}"
-    stty cols "${_SSH_COLS}" rows "${_SSH_ROWS}" 2>/dev/null
+local _sz
+_sz=$(stty size 2>/dev/null)
+_SSH_COLS="${_sz##* }" _SSH_ROWS="${_sz%% *}"
+(( ${_SSH_COLS:-0} > 0 )) 2>/dev/null || _SSH_COLS="${COLUMNS:-80}"
+(( ${_SSH_ROWS:-0} > 0 )) 2>/dev/null || _SSH_ROWS="${LINES:-24}"
+stty cols "${_SSH_COLS}" rows "${_SSH_ROWS}" 2>/dev/null
 }
 
+# ── locale: point glibc at THIS root's locale data by host path ──────────────
+# See the localedef note in the apt stage: setlocale() escapes fakechroot and
+# reads the host's locale tree, leaving every process in the C locale. LOCPATH
+# is honoured by that same internal loader. udocker_dev.sh passes it in too;
+# this copy covers a tmux server or shell started before that ran. The LC_ALL /
+# LANG assignment after it is what makes zsh re-run setlocale.
+if [[ -n ${FAKECHROOT_BASE:-} && -z ${LOCPATH:-} \
+      && -f $FAKECHROOT_BASE/usr/lib/locale/en_US.UTF-8/LC_CTYPE ]]; then
+  export LOCPATH="$FAKECHROOT_BASE/usr/lib/locale"
+  export LANG="${LANG:-en_US.UTF-8}"
+  export LC_ALL="${LC_ALL:-en_US.UTF-8}"
+fi
+
 # ── shell integrations (interactive only) ────────────────────────────────────
-eval "$(zoxide init zsh)"
-eval "$(fzf --zsh)"
-eval "$(starship init zsh)"
+# Each guarded: ~/.zshrc (synced from the repo) runs the same integrations, and
+# a SECOND `starship init` wraps the first one's zle-keymap-select, so every
+# vi-mode switch fires `zle reset-prompt` twice and zsh redraws the two-line
+# prompt a row too high per call — erasing 2 lines of output above it on each
+# Esc/i. Verified 2026-09-17. The guards make whichever file runs first win.
+(( ${+functions[__zoxide_hook]} ))         || eval "$(zoxide init zsh)"
+(( ${+functions[fzf-history-widget]} ))    || eval "$(fzf --zsh)"
+(( ${+functions[prompt_starship_precmd]} )) || eval "$(starship init zsh)"
 
 # ── fzf appearance + file source ─────────────────────────────────────────────
 # Applies to Ctrl-R (history), Ctrl-T (files), Alt-C (cd), bare `fzf`, and yazi's

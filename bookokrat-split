@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Open a PDF/EPUB in bookokrat (terminal reader).
-# Inside tmux: launch in a new split pane. Otherwise: run in the current terminal.
+# Open a PDF/EPUB in bookokrat (terminal reader), in a half split beside the
+# caller. Outside tmux: run in the current terminal.
 #
 # nvim 0.12 strips TERM, TMUX and NVIM from the environment of every child it
 # spawns — vim.system AND jobstart, and explicit env{} overrides are stripped
@@ -21,12 +21,49 @@ file=${1:?usage: bookokrat-split <file>}
 # nvim, vimtex) that may pass differently-spelled paths to the same file.
 file=$(realpath -- "$file" 2>/dev/null) || file=$1
 
+# Preflight: the file has to be readable RIGHT NOW, before anything is spawned.
+#
+# This is here for the CIRCE sshfs mounts (~/mnt/circe-{home,work}), where the
+# path can disappear underneath you: cmount's watchdog force-unmounts at its 12h
+# TTL, and a VPN drop or a laptop sleep strands the mount the same way. yazi goes
+# on serving its OWN cached directory listing either way, so the PDF still looks
+# like it is sitting right there.
+#
+# Without this check that failure is completely silent. yazi's opener is
+# `orphan = true`, which sends the child's stdout and stderr to /dev/null; the
+# split gets created, bookokrat exits immediately on the unreadable path, tmux
+# tears the pane straight back down, and pressing `o` looks like it did nothing
+# whatsoever. Local files never fail this way, which is exactly why it only ever
+# shows up on the mounts. Put the reason where the eyes already are.
+if [[ ! -r "$file" ]]; then
+    msg="bookokrat: cannot read ${file##*/}"
+    case "$file" in
+        "$HOME"/mnt/circe-*) msg="$msg — CIRCE mount is down (run cmount)" ;;
+        *)                   msg="$msg — file missing or unreadable" ;;
+    esac
+    # display-message puts it on the status line of the attached client, which
+    # is where you are looking; stderr is the fallback for a plain terminal.
+    # -d 4000: display-time is 750ms, far too quick for an error you were
+    # not expecting. Pinned here rather than raising it globally.
+    tmux display-message -d 4000 "$msg" 2>/dev/null || printf '%s\n' "$msg" >&2
+    exit 1
+fi
+
 [[ -z "${NVIM:-}" && -n "${BK_NVIM:-}" ]] && export NVIM="$BK_NVIM"
 
-# Resolve a tmux invocation + split target even when $TMUX was stripped.
-tmux_cmd=() target=()
+# Resolve a tmux invocation, a listing scope and a split target even when $TMUX
+# was stripped. Both arrays stay empty in the common in-tmux case, and macOS
+# ships bash 3.2, where `set -u` treats "${arr[@]}" on an EMPTY array as an
+# unbound variable and aborts. Every expansion below therefore uses the
+# 3.2-safe ${arr[@]+"${arr[@]}"} form, which expands to nothing when unset.
+#   scope — which session to search for an already-open copy of this file.
+#   spot  — which pane to split. $TMUX_PANE is the caller's own pane (yazi's),
+#           which is more precise than "whatever is active by the time tmux
+#           gets round to running the command".
+tmux_cmd=() scope=() spot=()
 if [[ -n "${TMUX:-}" ]]; then
     tmux_cmd=(tmux)
+    [[ -n "${TMUX_PANE:-}" ]] && spot=(-t "$TMUX_PANE")
 else
     sock="${BK_TMUX_SOCK:-/tmp/tmux-$(id -u)/default}"
     if [[ -S "$sock" ]]; then
@@ -36,7 +73,8 @@ else
         [[ -n "$sess" ]] || sess=$(tmux -S "$sock" list-sessions -F '#{session_name}' 2>/dev/null | head -1) || true
         if [[ -n "$sess" ]]; then
             tmux_cmd=(tmux -S "$sock")
-            target=(-t "$sess")
+            scope=(-t "$sess")
+            spot=(-t "$sess")   # splits that session's active pane
         fi
     fi
 fi
@@ -56,21 +94,90 @@ if (( ${#tmux_cmd[@]} )); then
             found=$pane_id
             break
         fi
-    done < <("${tmux_cmd[@]}" list-panes -s "${target[@]}" -F '#{pane_id}' 2>/dev/null || true)
+    done < <("${tmux_cmd[@]}" list-panes -s ${scope[@]+"${scope[@]}"} -F '#{pane_id}' 2>/dev/null || true)
     if [[ -n "$found" ]]; then
         "${tmux_cmd[@]}" select-window -t "$found"
         exec "${tmux_cmd[@]}" select-pane -t "$found"
     fi
 
-    # split-window runs its command via the shell; %q-quote the path so
-    # spaces and special characters survive that extra shell layer.
-    cmd="bookokrat --zen-mode $(printf '%q' "$file")"
+    # A reader pane already open in THIS window, on some other file? Reuse it
+    # rather than splitting again — a second split would cut the window into
+    # thirds, and a third into quarters. respawn-pane swaps the file in place
+    # and keeps the half-and-half layout.
+    reuse=""
+    while read -r pane_id; do
+        tag=$("${tmux_cmd[@]}" show-options -p -t "$pane_id" -qv @bkfile 2>/dev/null) || true
+        if [[ -n "$pane_id" && -n "$tag" ]]; then
+            reuse=$pane_id
+            break
+        fi
+    done < <("${tmux_cmd[@]}" list-panes ${scope[@]+"${scope[@]}"} -F '#{pane_id}' 2>/dev/null || true)
+
+    # Absolute path, NOT a bare `bookokrat`: the pane command runs via `zsh -c`,
+    # which is neither login nor interactive, so it never sources ~/.zshrc —
+    # the PATH entry that normally orders these isn't there, and the tmux
+    # server's own PATH is whatever it inherited whenever it started. Naming
+    # the binaries outright removes the guesswork.
+    #
+    # This is the REAL binary on every platform. There used to be a wrapper in
+    # ~/.local/bin/override that forced bookokrat's Unicode-placeholder anchor
+    # path on under Ghostty; it is gone, and must not come back. That path
+    # draws the page as a placement RELATIVE to a tmux-owned anchor cell (Kitty
+    # keys P= and Q=), and Ghostty 1.3.1 does not implement relative
+    # placements — it drops P/Q and places the page at wherever the terminal
+    # cursor happens to be, which lands it on top of yazi while the reader's
+    # own pane stays empty. Measured by screenshot, 2026-09-04. The real binary
+    # positions the page from #{pane_top}/#{pane_left} instead, which is
+    # correct in a split; the leftover-image problem that wrapper was written
+    # to solve is handled by tmux-kitty-image-gc.
+    #
+    # Only two machines run this: Darwin is the Mac, where bookokrat comes from
+    # Homebrew; everything else is the CIRCE container, where the Dockerfile
+    # installs it to /usr/local/bin/bookokrat (stage 5f) and $HOME is the
+    # bind-mounted CIRCE home, so this very file is the one that got synced.
+    if [[ "$(uname -s)" == Darwin ]]; then
+        reader_path=/opt/homebrew/bin/bookokrat
+    else
+        reader_path=/usr/local/bin/bookokrat
+    fi
+    [[ -x "$reader_path" ]] || reader_path=$(command -v bookokrat) || {
+        echo "bookokrat-split: no bookokrat binary found" >&2; exit 127
+    }
+    gc_path="$HOME/.local/bin/tmux-kitty-image-gc"
+
+    reader=$(printf '%q' "$reader_path")
+    # sleep 0.2: bookokrat asks tmux for #{pane_top}/#{pane_left} of the ACTIVE
+    # pane the moment it starts, and reads the terminal's reply to its Kitty
+    # SHM probe. Started in the same breath as the split, it can get there
+    # before tmux has finished making the new pane active and telling the
+    # client about it, and the first page then never appears at all (seen
+    # repeatedly before this was added). A fifth of a second is invisible next
+    # to the ~3s the reader takes to come up.
+    cmd="sleep 0.2; $reader --zen-mode $(printf '%q' "$file")"
     # Carry the launching editor's server socket into the pane so bookokrat's
     # SyncTeX inverse search can jump back to that exact editor.
     if [[ -n "${NVIM:-}" ]]; then
         cmd="NVIM=$(printf '%q' "$NVIM") $cmd"
     fi
-    pane=$("${tmux_cmd[@]}" split-window -h "${target[@]}" -P -F '#{pane_id}' "$cmd")
+    # ...and on the way out, take the page off the screen. Ghostty holds it as
+    # a classic Kitty placement that tmux knows nothing about, so without this
+    # quitting the reader leaves the page painted over whatever is underneath.
+    # `;` not `&&`: it has to run however bookokrat exited.
+    cmd="$cmd; $(printf '%q' "$gc_path") --exiting"
+
+    if [[ -n "$reuse" ]]; then
+        # Wipe the outgoing page first — respawn-pane -k kills bookokrat
+        # outright, so the cleanup appended to its command never runs.
+        "$gc_path" >/dev/null 2>&1 || true
+        "${tmux_cmd[@]}" respawn-pane -k -t "$reuse" "$cmd"
+        "${tmux_cmd[@]}" set-option -p -t "$reuse" @bkfile "$file"
+        exec "${tmux_cmd[@]}" select-pane -t "$reuse"
+    fi
+
+    # A half split beside the caller, which is what a file manager and a reader
+    # want to be: hover a PDF on the left, read it on the right. `-h` is the
+    # side-by-side one (tmux's glyphs suggest the opposite of what they do).
+    pane=$("${tmux_cmd[@]}" split-window -h -l 50% ${spot[@]+"${spot[@]}"} -P -F '#{pane_id}' "$cmd")
     exec "${tmux_cmd[@]}" set-option -p -t "$pane" @bkfile "$file"
 else
     exec bookokrat --zen-mode "$file"

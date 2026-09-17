@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Age of the most recent tmux-resurrect save, for the tmux status bar.
+#
+# Session save/restore is MANUAL here (tmux-continuum is deliberately not
+# loaded — see tmux.conf), so nothing else on screen tells you that the last
+# save is days old and a restore would drop you back into a stale layout.
+# This prints that age, coloured by how stale it is:
+#
+#   prefix + Ctrl-s   save now        prefix + Ctrl-r   restore last save
+#
+# Output is a tmux style sequence + a short age ("12m", "3h", "2d", "none").
+# It is embedded in a Catppuccin status module, which sets bg and the icon
+# colour; only the text fg is overridden here.
+#
+# The three hex values are Catppuccin MOCHA green/yellow/red. They are
+# hardcoded rather than read from @thm_* because this runs as a `#()`
+# shell-out, outside tmux's format expansion. tmux.conf pins the flavour to
+# mocha, so they cannot drift apart silently — but if you change the flavour,
+# change them here too.
+set -u
+
+GREEN='#a6e3a1'   # saved recently
+YELLOW='#f9e2af'  # getting stale
+RED='#f38ba8'     # stale, or never saved
+
+LAST="${HOME}/.local/share/tmux/resurrect/last"
+
+if [ ! -e "$LAST" ]; then
+  printf '#[fg=%s]none' "$RED"
+  exit 0
+fi
+
+# -L so we stat the save file itself, not the symlink that points at it.
+# GNU stat (the Linux container) first, BSD stat (macOS) as the fallback. The
+# order matters: GNU reads `-f %m` as "filesystem mode, files %m and $LAST", so
+# it fails on %m but still prints a block of filesystem info for $LAST to
+# stdout before exiting 1 — the substitution would capture that block plus the
+# fallback's number. BSD stat rejects -c outright and prints nothing.
+mtime=$(stat -L -c %Y "$LAST" 2>/dev/null || stat -L -f %m "$LAST" 2>/dev/null) || exit 0
+[ -n "$mtime" ] || exit 0
+
+age=$(( $(date +%s) - mtime ))
+[ "$age" -lt 0 ] && age=0
+
+if   [ "$age" -lt 60 ];    then text="now"
+elif [ "$age" -lt 3600 ];  then text="$(( age / 60 ))m"
+elif [ "$age" -lt 86400 ]; then text="$(( age / 3600 ))h"
+else                            text="$(( age / 86400 ))d"
+fi
+
+if   [ "$age" -lt 1800 ];  then colour="$GREEN"    # < 30 min
+elif [ "$age" -lt 14400 ]; then colour="$YELLOW"   # < 4 h
+else                            colour="$RED"
+fi
+
+printf '#[fg=%s]%s' "$colour" "$text"

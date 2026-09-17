@@ -31,7 +31,7 @@ configs without rebuilding):
 
 ```bash
 ./sync_configs.sh   # push to CIRCE: term_session.sh → ~/sh/, udocker_dev.sh → ~/bin/,
-                    # bookokrat-{split,forward,inverse} → ~/.local/bin/,
+                    # the bookokrat helpers → ~/.local/bin/,
                     # and ~/.config/{nvim,yazi,tmux,bookokrat,starship,…}
 ```
 
@@ -72,9 +72,44 @@ Neovim and bookokrat run on the same node.
 
 - **Binary** — baked into the image at `/usr/local/bin/bookokrat` (Dockerfile Stage 5f).
 - **Wrappers** — synced to `~/.local/bin/` by `sync_configs.sh` (on `$PATH` inside the container):
-  - `bookokrat-split` — opens a PDF in a new tmux split (forwards `$NVIM` for inverse search).
+  - `bookokrat-split` — opens a PDF in a **half split beside the caller** (forwards
+    `$NVIM` for inverse search). Opening a second PDF respawns that same reader pane
+    rather than splitting again; opening one already on screen just jumps to it.
+    Panes carry the pane option `@bkfile`, which is how both are recognised.
   - `bookokrat-forward` — VimTeX forward search (`<localleader>lv`): jumps an open instance, or launches one.
   - `bookokrat-inverse` — synctex inverse search: `gd` / Ctrl-click in the PDF jumps Neovim to the source line.
+  - `tmux-kitty-image-gc` — takes the page **off the screen** when you switch away
+    from the reader or quit it (bookokrat#179). Under ghostty bookokrat draws a
+    classic kitty placement, which **tmux holds no cell for**, so a window switch
+    repaints the text and leaves the page painted over the window you switched to.
+    This writes the kitty delete escape straight to the client tty — around tmux's
+    pane-visibility rules, which would swallow it — then sends `C-l` to any reader
+    still on screen. Deletes are targeted at z-index `-1` / image id `1`, where
+    bookokrat draws and yazi does not, so a neighbouring preview survives. Wired in
+    `configs/tmux/tmux.conf` (`session-window-changed`, `client-session-changed`)
+    and appended to the reader's own command line by `bookokrat-split`. The repaint
+    on return costs ~1-1.5s here (remote render + re-upload) against ~100-300ms on
+    the Mac — that is the SSH page floor.
+    Only a reader that is **visible but not focused** actually leaks: with the
+    cursor in the reader, bookokrat tears its own placements down on focus-out and
+    this script finds nothing to do. That is why the bug reads as intermittent —
+    it depends on which pane had the cursor. `focus-events on` is therefore
+    load-bearing for images, not just for nvim. Measured 2026-09-07.
+- **One file each, shared with the Mac.** `sync_configs.sh` prefers the LIVE
+  `~/.local/bin/` copy over the repo-root snapshot, so an edit made live must be
+  copied back to the repo **and** an edit made only in the repo is discarded by the
+  next sync. Platform differences live inside the scripts (`uname -s`), which is how
+  `bookokrat-split` picks Homebrew's binary on the Mac and `/usr/local/bin/bookokrat`
+  here.
+- **Retired: the `~/.local/bin/override/bookokrat` wrapper** (and its `tmux` shim
+  under `~/.local/libexec/`). It answered bookokrat's outer-terminal probe with
+  `kitty` to force the Unicode-placeholder anchor path back on. Ghostty 1.3.1 does
+  not implement the relative placements that path emits (kitty keys `P=`/`Q=`) — it
+  drops them and paints the page at the cursor, i.e. on top of yazi, leaving the
+  reader's pane empty. Removed 2026-09-04; it was never viable here in any case,
+  the anchor path being implemented only over SHM transmission while the shm object
+  lives in `/dev/shm` on the compute node and ghostty runs on the Mac. Do not
+  reintroduce it — `tmux-kitty-image-gc` is the supported fix.
 - **Config** — `configs/bookokrat/` → `~/.config/bookokrat/` (inverse search wired via `synctex_editor`).
 - **Wiring** — VimTeX (`configs/nvim/lua/plugins/vimtex.lua`, `general` viewer), yazi
   (`*.pdf`/`*.epub` opener), and `vim.ui.open` / snacks-explorer
@@ -92,6 +127,19 @@ In yazi: Enter on a `.pdf`/`.epub` opens it in a bookokrat split.
 In Neovim: `<localleader>lv` in a `.tex` forward-searches; `gd` / Ctrl-click in
 bookokrat jumps back to the source line.
 
+**Start tmux on this side first — "in tmux" above is not optional.** If you SSH
+in from inside a *local* tmux on the Mac and run bookokrat with no tmux here,
+bookokrat sees no `$TMUX`, emits raw kitty escapes instead of wrapping them for
+passthrough, and the local tmux swallows them: the reader's frame and scrollbar
+draw and the page never appears. `tm` first. It looks like a PDF that failed to
+load rather than a terminal problem, which is what makes it worth knowing.
+
+Nesting is otherwise fine. With tmux running on both sides the page renders
+correctly through both multiplexers, and nothing is left painted behind on an
+inner or an outer session switch — the leftover-page bug needs a single
+multiplexer, i.e. the ordinary bare-ghostty `connect_nvim.sh` case. Measured end
+to end with a real PDF, 2026-09-07.
+
 ## How configs/ syncs
 
 `sync_configs.sh` applies a per-cfg policy in its staging step:
@@ -102,7 +150,18 @@ bookokrat jumps back to the source line.
 | `tmux` | **replace** — repo's `configs/tmux/` becomes CIRCE's `~/.config/tmux/` | Container-specific multiplexer config (replaced zellij); no Mac copy |
 | `bookokrat` | **replace** — repo's `configs/bookokrat/` becomes CIRCE's `~/.config/bookokrat/` | Container owns the bookokrat config |
 | `nvim` | **overlay** — Mac's `~/.config/nvim/` is staged, then `configs/nvim/*` is rsync'd on top | Keeps your Mac LazyVim config canonical; drops in the container plugins |
-| `avante.nvim`, `github-copilot`, `btm` | **mac-only** — direct from Mac | No container-specific overrides needed |
+| `avante.nvim`, `github-copilot`, `btm` | **mac-only** — direct from Mac | No container-specific overrides needed (but see the Copilot auth note below) |
+
+**Copilot auth is stored unencrypted, on purpose.** The Mac's
+`~/.config/nvim/lua/plugins/copilot.lua` (tracked in `02_dotfiles`) launches
+`copilot-language-server` with `GITHUB_COPILOT_AUTH_TOKEN_ENCRYPTION=false`.
+Otherwise the server encrypts `~/.config/github-copilot/auth.db` with a key held
+in the macOS login Keychain, and macOS asked for Keychain access on every nvim
+launch. The nvim overlay carries that setting into the container too, so both
+sides read and write the token in plaintext. A container has no Keychain
+anyway, so Mac-encrypted auth entries could never have been decrypted here.
+Don't drop the override from either side; if Copilot reports it is signed out,
+run `:Copilot auth` on the Mac and re-sync.
 
 To add another override: drop files into `configs/<cfg>/` and (if needed) add
 the cfg name to `CONFIG_LIST` and the `replace`/`overlay` case in `sync_configs.sh`.
