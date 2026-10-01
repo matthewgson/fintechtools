@@ -51,9 +51,9 @@ unpacked copy, so a rebuild is picked up with no manual step.
 | Quarto | Latest GitHub release, installed at `/opt/quarto`, on `$PATH` as `quarto`. Bundles pandoc + Deno. PDF output works out of the box via the TinyTeX install below. |
 | LaTeX | **TinyTeX** baked in at `/opt/TinyTeX` — installed via direct tarball pull from [`rstudio/tinytex-releases`](https://github.com/rstudio/tinytex-releases) (`TinyTeX-linux-x86_64-<TAG>.tar.xz`), no R/Rscript dependency in Stage 5d. Binaries symlinked into `/usr/local/bin` via `tlmgr path add` (with `sys_bin` pinned explicitly so the build does not fall back to `/root/.local/bin`). Ships `latexmk`, `pdflatex`, `xelatex`, `lualatex`, `biber`, plus `collection-latexrecommended`, `collection-fontsrecommended`, and `biblatex`. VimTeX (`lang.tex` extra) and Quarto find them automatically. The image is read-only at runtime, so extra packages install in user-mode — `TEXMFHOME` is pinned to `~/texmf` in zshenv so `tlmgr --usermode init-usertree && tlmgr --usermode install <pkg>` lands in a predictable, kpathsea-discoverable tree (no root required). Alternatively, rebuild the container with the package appended to Stage 5d. A pre-existing `~/.TinyTeX` install is honored — zshenv prepends it to `$PATH` so any user-installed extras win over the system copy. |
 | Editor | Neovim (latest) + LazyVim starter |
-| LazyVim extras | `ai.copilot`, `lang.html`, `lang.python`, plus git/json/markdown/yaml/toml |
+| LazyVim extras | Whatever the Mac's `~/.config/nvim/lazyvim.json` enables (the nvim sync is an overlay of it), minus `lang.rust`. No AI extras: avante.nvim and Copilot were removed 2026-10-01 |
 | Terminal | **tmux 3.6b** (multiplexer, built from source — newer than 24.04's apt 3.4, which is too old for ghostty's CSI-u extended keys over SSH and broke `Ctrl+Space`/`Ctrl+h/j/k/l`), Yazi (file manager) with all recommended deps, lazygit, `ncurses-term` (many terminfos) |
-| AI agents | `claude` (Claude Code) **is** bundled and runs well in-container under udocker/F3 (much snappier than the old ptrace runtime; F3's LD_PRELOAD path avoids the per-syscall tax). Running it locally on the Mac and driving the node over SSH is still an option. The standalone `copilot` CLI is **not** bundled (run locally). Neovim's inline Copilot (LSP via `copilot.lua`/`avante.nvim`) **is** included. |
+| AI agents | `claude` (Claude Code) **is** bundled and runs well in-container under udocker/F3 (much snappier than the old ptrace runtime; F3's LD_PRELOAD path avoids the per-syscall tax). Running it locally on the Mac and driving the node over SSH is still an option. Copilot is **not** bundled in any form: neither the standalone `copilot` CLI nor the nvim Copilot/avante plugins and their language server (removed 2026-10-01 after repeated build failures). |
 | SSH | `openssh-client` (git/scp); sshd not used |
 | PDF viewer | **bookokrat** at `/usr/local/bin/bookokrat` — terminal PDF/EPUB reader (kitty graphics, renders over SSH; no X11). VimTeX (`<localleader>lv`), yazi, and snacks-explorer route PDFs to it (see "PDF viewing" below). |
 
@@ -150,18 +150,12 @@ to end with a real PDF, 2026-09-07.
 | `tmux` | **replace** — repo's `configs/tmux/` becomes CIRCE's `~/.config/tmux/` | Container-specific multiplexer config (replaced zellij); no Mac copy |
 | `bookokrat` | **replace** — repo's `configs/bookokrat/` becomes CIRCE's `~/.config/bookokrat/` | Container owns the bookokrat config |
 | `nvim` | **overlay** — Mac's `~/.config/nvim/` is staged, then `configs/nvim/*` is rsync'd on top | Keeps your Mac LazyVim config canonical; drops in the container plugins |
-| `avante.nvim`, `github-copilot`, `btm` | **mac-only** — direct from Mac | No container-specific overrides needed (but see the Copilot auth note below) |
+| `bottom` | **default** — direct from Mac | No container-specific overrides needed |
 
-**Copilot auth is stored unencrypted, on purpose.** The Mac's
-`~/.config/nvim/lua/plugins/copilot.lua` (tracked in `02_dotfiles`) launches
-`copilot-language-server` with `GITHUB_COPILOT_AUTH_TOKEN_ENCRYPTION=false`.
-Otherwise the server encrypts `~/.config/github-copilot/auth.db` with a key held
-in the macOS login Keychain, and macOS asked for Keychain access on every nvim
-launch. The nvim overlay carries that setting into the container too, so both
-sides read and write the token in plaintext. A container has no Keychain
-anyway, so Mac-encrypted auth entries could never have been decrypted here.
-Don't drop the override from either side; if Copilot reports it is signed out,
-run `:Copilot auth` on the Mac and re-sync.
+`avante.nvim` and `github-copilot` used to sync here too. They were dropped on
+2026-10-01 together with the avante and Copilot nvim plugins. A sync never
+deletes on CIRCE, so old copies of both directories stay there until removed by
+hand.
 
 To add another override: drop files into `configs/<cfg>/` and (if needed) add
 the cfg name to `CONFIG_LIST` and the `replace`/`overlay` case in `sync_configs.sh`.

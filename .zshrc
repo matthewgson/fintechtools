@@ -115,8 +115,8 @@ tm() { tmux new-session -A -s "${1:-main}"; }
 # "module not found" for nvim-treesitter / trouble / blink.cmp / R.nvim / ….
 #
 # `git checkout -f` rebuilds each working tree from the surviving local git
-# objects — offline, instant, no re-clone — and leaves untracked files (avante /
-# blink native *.so) alone. Canary-gated: a healthy launch costs only a few
+# objects — offline, instant, no re-clone — and leaves untracked files (blink's
+# native *.so) alone. Canary-gated: a healthy launch costs only a few
 # stat()s; the full restore runs only when a hot plugin's worktree was reaped.
 #
 # 2026-08-10: this guard failed and nvim died with "No specs found for module

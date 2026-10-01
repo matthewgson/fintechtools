@@ -78,9 +78,8 @@ and RHEL7's glibc-2.17 loader is handed the container's 2.39 libc:
 checklist above will not find it.
 
 Two guarded subtrees hold every non-apt binary in the image, which is why this
-bites: `usr/lib/node_modules` (tree-sitter-cli, copilot-language-server,
-claude) and `usr/local/lib/R/site-library` (processx's `px`/`supervisor`/`sock`
-and ps's `px`, which `callr` and Quarto rendering sit on). Found 2026-09-03
+bites: `usr/lib/node_modules` (tree-sitter-cli, claude) and
+`usr/local/lib/R/site-library` (processx's `px`/`supervisor`/`sock` and ps's `px`, which `callr` and Quarto rendering sit on). Found 2026-09-03
 when `tree-sitter` would not run; every stock-interpreter binary on the node
 was inside one of those two, and the R library had been restored on 2026-08-21
 from 1 surviving package of 43.
@@ -203,15 +202,14 @@ partial clones (`repositoryformatversion=1`) and would silently never fire.
   -1 and image id 1 — where bookokrat draws and where yazi does not — so a
   preview in the neighbouring pane survives. Repaint costs ~1-1.5s here against
   ~100-300ms on the Mac; that is the remote page floor, not a fault.
-* **Copilot's auth token is plaintext by design — keep it that way.** The Mac's
-  nvim `lua/plugins/copilot.lua` (canonical copy in `02_dotfiles`, reaches the
-  container through the nvim overlay) sets
-  `server_opts_overrides.cmd_env.GITHUB_COPILOT_AUTH_TOKEN_ENCRYPTION = "false"`.
-  Without it `copilot-language-server` encrypts `github-copilot/auth.db` with a
-  macOS login-Keychain key, which re-prompted on every Mac launch (fixed
-  2026-09-13) and which nothing on Linux can decrypt. Don't add a
-  `configs/nvim` copy of `copilot.lua` that drops this override. See README
-  "How configs/ syncs".
+* **No AI plugins in nvim — avante.nvim and Copilot were removed 2026-10-01**
+  because they kept failing to build. They are gone from both sides at once:
+  the Mac's `lazyvim.json` (canonical in `02_dotfiles`) dropped the `ai.avante`
+  and `ai.copilot` extras and their `lua/plugins/{avante,copilot}.lua`, the
+  nvim overlay carries that to CIRCE, the Dockerfile no longer installs
+  `@github/copilot-language-server`, and `sync_configs.sh` no longer pushes
+  `~/.config/{avante.nvim,github-copilot}`. Don't re-add them through
+  `configs/nvim`; Claude Code (`claude`) is the in-container AI tool.
 * **SSH to CIRCE is rate-limited by source IP** on a shared VPN pool address.
   One connection per session: use the `circe` alias, reuse the master
   (`ssh -O check`), and never re-run a refused command.

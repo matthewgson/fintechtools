@@ -256,7 +256,7 @@ _REAP_GUARDS=(
 # `fintech-rootfs.tar` is the pristine image, so every binary in it carries the
 # stock interpreter. `tar x` above therefore un-patches whatever it restores,
 # and the guarded subtrees are exactly where the non-apt binaries live:
-# usr/lib/node_modules (tree-sitter-cli, copilot-language-server, claude) and
+# usr/lib/node_modules (tree-sitter-cli, claude) and
 # usr/local/lib/R/site-library (processx's px/supervisor/sock, ps's px, which
 # callr and Quarto rendering sit on top of). Diagnosed 2026-09-03 after
 # tree-sitter failed to run: every unpatched binary on the node was inside one

@@ -648,18 +648,18 @@ RUN mkdir -p -m 755 /etc/apt/keyrings && \
 # machinery were removed (2026-06-24). Run SLURM commands on the CIRCE login
 # node, or a host shell (ssh -J circe <node>) — not inside the container.
 
-# ─── Stage 11: claude-code CLI + Neovim Copilot LSP + tree-sitter ────────────
+# ─── Stage 11: claude-code CLI + tree-sitter ─────────────────────────────────
 # @anthropic-ai/claude-code       : Anthropic Claude terminal coding agent. Kept
 #     as an in-container option; under udocker's Fakechroot/F3 it's far more
 #     responsive than under the old ptrace runtime (Claude is syscall-heavy, which
 #     F3's LD_PRELOAD path avoids). Running `claude` on the Mac and driving this
 #     box over SSH is still an option.
-# @github/copilot-language-server : GitHub Copilot LSP backend for Neovim
-#     Copilot plugins (copilot.lua, avante.nvim) — inline completions + chat.
 # tree-sitter-cli                 : required by nvim-treesitter to compile parsers.
 #
-# The standalone GitHub Copilot CLI (@github/copilot) is intentionally NOT
-# installed — run it locally if you need it.
+# No Copilot anything (removed 2026-10-01): avante.nvim and copilot.lua are gone
+# from the nvim config on both sides because they kept failing to build, so
+# @github/copilot-language-server has nothing left to serve. The standalone
+# GitHub Copilot CLI (@github/copilot) was never installed.
 # Do NOT run `claude --version` here to log the version. Claude Code ships as a
 # Bun-compiled binary, and this image is built --platform linux/amd64 on an
 # arm64 Mac, so every RUN executes under QEMU emulation — where Bun segfaults:
@@ -679,7 +679,7 @@ RUN mkdir -p -m 755 /etc/apt/keyrings && \
 # binary works until the first reap and then dies with a GLIBC_PRIVATE
 # relocation error that looks nothing like a missing file.
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-  @github/copilot-language-server tree-sitter-cli && \
+  tree-sitter-cli && \
   npm ls -g --depth=0 @anthropic-ai/claude-code || true
 
 # ─── Stage 11a: (removed) claude-auto-retry ──────────────────────────────────

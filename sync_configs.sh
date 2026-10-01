@@ -55,7 +55,9 @@ echo "========================================="
 echo
 
 # ── Discover what exists ──────────────────────────────────────────────────────
-CONFIG_LIST=(avante.nvim github-copilot bottom nvim yazi tmux bookokrat starship git)
+# avante.nvim and github-copilot were dropped 2026-10-01 along with the plugins
+# themselves. Copies already on CIRCE are not deleted by a sync (no --delete).
+CONFIG_LIST=(bottom nvim yazi tmux bookokrat starship git)
 CONFIGS_DIR="${SCRIPT_DIR}/configs"
 
 # LazyVim extras to DROP from the container's nvim config only. The nvim sync is
