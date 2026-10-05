@@ -233,6 +233,62 @@ resolve_latest_versions() {
   NVIM_RESOLVED="$nv"; CLAUDE_CODE_RESOLVED="$cc"
   BUILD_ARGS=( --build-arg "NVIM_VERSION=${nv}" --build-arg "CLAUDE_CODE_VERSION=${cc}" )
   print_status "Tracking latest → Neovim ${nv}, claude-code ${cc}"
+
+  resolve_tool_versions
+}
+
+# The other GitHub-release tools default to `latest` in the Dockerfile too, but
+# their RUN steps splice the version straight into a /releases/download/<tag>/
+# URL — and often into the asset's filename (quarto-<v>-linux-amd64.tar.gz) —
+# so a literal `latest` is a guaranteed 404, not a cache-permitting fallback.
+# Unlike Neovim above, these MUST resolve here, and the build stops if one can't.
+#
+# Columns: build-arg, GitHub repo, how the Dockerfile wants the tag
+#   strip = drop a leading `v` (the step writes v${VER} itself)
+#   keep  = the tag exactly as published
+#   tags  = tag-only repo (no GitHub Releases): newest v* tag via ls-remote
+# Override any one by exporting it, e.g. UV_VERSION=0.11.21 ./build_container.sh
+TOOL_VERSIONS='
+UV_VERSION              astral-sh/uv                 keep
+QUARTO_VERSION          quarto-dev/quarto-cli        strip
+LAZYGIT_VERSION         jesseduffield/lazygit        strip
+YAZI_VERSION            sxyazi/yazi                  keep
+RESVG_VERSION           linebender/resvg             strip
+FZF_VERSION             junegunn/fzf                 strip
+ZOXIDE_VERSION          ajeetdsouza/zoxide           strip
+BOTTOM_VERSION          ClementTsang/bottom          keep
+BOOKOKRAT_VERSION       bugzmanov/bookokrat          keep
+CATPPUCCIN_TMUX_VERSION catppuccin/tmux              keep
+TMUX_RESURRECT_VERSION  tmux-plugins/tmux-resurrect  tags
+TMUX_CONTINUUM_VERSION  tmux-plugins/tmux-continuum  tags
+'
+
+resolve_tool_versions() {
+  local var repo mode ver summary=""
+  while read -r var repo mode; do
+    [ -n "$var" ] || continue
+    ver="${!var:-}"
+    if [ -z "$ver" ]; then
+      if [ "$mode" = "tags" ]; then
+        ver=$(git ls-remote --tags --refs --sort=-v:refname \
+                "https://github.com/${repo}.git" 'v*' 2>/dev/null \
+              | head -1 | sed 's#.*refs/tags/##' || true)
+      else
+        ver=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+                "https://github.com/${repo}/releases/latest" 2>/dev/null \
+              | sed -n 's#.*/tag/##p' || true)
+      fi
+      [ "$mode" = "strip" ] && ver="${ver#v}"
+    fi
+    if [ -z "$ver" ]; then
+      print_error "Could not resolve the latest ${repo} release for ${var}."
+      print_status "Pin it and re-run, e.g.: ${var}=<version> $0"
+      exit 1
+    fi
+    BUILD_ARGS+=( --build-arg "${var}=${ver}" )
+    summary="${summary} ${repo##*/}=${ver}"
+  done <<< "$TOOL_VERSIONS"
+  print_status "Resolved tool versions →${summary}"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

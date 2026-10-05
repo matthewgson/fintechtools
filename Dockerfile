@@ -248,7 +248,7 @@ ENV UV_PYTHON=/usr/local/bin/python3
 # ─── Stage 4: uv (Astral) — fast Python package + project manager ───────────
 RUN UV_VERSION=${UV_VERSION} && \
   echo "Installing uv ${UV_VERSION}" && \
-  curl -L "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" \
+  curl -fL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" \
   -o /tmp/uv.tar.gz && \
   tar -C /tmp -xzf /tmp/uv.tar.gz && \
   mv /tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv && \
@@ -331,7 +331,7 @@ RUN Rscript -e 'install.packages("languageserver")' && \
 # provided by Stage 5d (TinyTeX) below.
 RUN QUARTO_VERSION=${QUARTO_VERSION} && \
   echo "Installing Quarto ${QUARTO_VERSION}" && \
-  curl -L "https://github.com/quarto-dev/quarto-cli/releases/download/v${QUARTO_VERSION}/quarto-${QUARTO_VERSION}-linux-amd64.tar.gz" \
+  curl -fL "https://github.com/quarto-dev/quarto-cli/releases/download/v${QUARTO_VERSION}/quarto-${QUARTO_VERSION}-linux-amd64.tar.gz" \
   -o /tmp/quarto.tar.gz && \
   mkdir -p /opt/quarto && \
   tar -C /opt/quarto --strip-components=1 -xzf /tmp/quarto.tar.gz && \
@@ -447,7 +447,7 @@ RUN if [ "${NVIM_VERSION}" = "latest" ]; then \
 # ─── Stage 7: lazygit (LazyVim git UI) ──────────────────────────────────────
 RUN LAZYGIT_VERSION=${LAZYGIT_VERSION} && \
   echo "Installing lazygit ${LAZYGIT_VERSION}" && \
-  curl -L "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_Linux_x86_64.tar.gz" \
+  curl -fL "https://github.com/jesseduffield/lazygit/releases/download/v${LAZYGIT_VERSION}/lazygit_${LAZYGIT_VERSION}_Linux_x86_64.tar.gz" \
   -o /tmp/lazygit.tar.gz && \
   tar -C /usr/local/bin -xzf /tmp/lazygit.tar.gz lazygit && \
   rm /tmp/lazygit.tar.gz
@@ -469,7 +469,7 @@ COPY --from=gitstatic /opt/git-static /opt/git-static
 # ─── Stage 8: Yazi terminal file manager ────────────────────────────────────
 RUN YAZI_VERSION=${YAZI_VERSION} && \
   echo "Installing Yazi ${YAZI_VERSION}" && \
-  curl -L "https://github.com/sxyazi/yazi/releases/download/${YAZI_VERSION}/yazi-x86_64-unknown-linux-gnu.zip" \
+  curl -fL "https://github.com/sxyazi/yazi/releases/download/${YAZI_VERSION}/yazi-x86_64-unknown-linux-gnu.zip" \
   -o /tmp/yazi.zip && \
   unzip -o /tmp/yazi.zip -d /tmp/yazi_extracted && \
   cp /tmp/yazi_extracted/yazi-x86_64-unknown-linux-gnu/yazi /usr/local/bin/yazi && \
@@ -480,7 +480,7 @@ RUN YAZI_VERSION=${YAZI_VERSION} && \
 # ─── Stage 8b: resvg (Yazi SVG preview) ─────────────────────────────────────
 RUN RESVG_VERSION=${RESVG_VERSION} && \
   echo "Installing resvg ${RESVG_VERSION}" && \
-  curl -L "https://github.com/linebender/resvg/releases/download/v${RESVG_VERSION}/resvg-linux-x86_64.tar.gz" \
+  curl -fL "https://github.com/linebender/resvg/releases/download/v${RESVG_VERSION}/resvg-linux-x86_64.tar.gz" \
   -o /tmp/resvg.tar.gz && \
   tar -C /usr/local/bin -xzf /tmp/resvg.tar.gz resvg && \
   chmod +x /usr/local/bin/resvg && \
@@ -497,14 +497,14 @@ RUN RESVG_VERSION=${RESVG_VERSION} && \
 # built-in walker (see zshenv below) — so fd stays the plain apt build.
 RUN FZF_VERSION=${FZF_VERSION} && \
   echo "Installing fzf ${FZF_VERSION}" && \
-  curl -L "https://github.com/junegunn/fzf/releases/download/v${FZF_VERSION}/fzf-${FZF_VERSION}-linux_amd64.tar.gz" \
+  curl -fL "https://github.com/junegunn/fzf/releases/download/v${FZF_VERSION}/fzf-${FZF_VERSION}-linux_amd64.tar.gz" \
   -o /tmp/fzf.tar.gz && \
   tar -C /usr/local/bin -xzf /tmp/fzf.tar.gz fzf && \
   chmod +x /usr/local/bin/fzf && \
   rm /tmp/fzf.tar.gz
 RUN ZOXIDE_VERSION=${ZOXIDE_VERSION} && \
   echo "Installing zoxide ${ZOXIDE_VERSION}" && \
-  curl -L "https://github.com/ajeetdsouza/zoxide/releases/download/v${ZOXIDE_VERSION}/zoxide-${ZOXIDE_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+  curl -fL "https://github.com/ajeetdsouza/zoxide/releases/download/v${ZOXIDE_VERSION}/zoxide-${ZOXIDE_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
   -o /tmp/zoxide.tar.gz && \
   tar -C /usr/local/bin -xzf /tmp/zoxide.tar.gz zoxide && \
   chmod +x /usr/local/bin/zoxide && \
@@ -513,7 +513,7 @@ RUN ZOXIDE_VERSION=${ZOXIDE_VERSION} && \
 # ─── Stage 8e: bottom (process/system monitor — replaces htop) ───────────────
 RUN BOTTOM_VERSION=${BOTTOM_VERSION} && \
   echo "Installing bottom ${BOTTOM_VERSION}" && \
-  curl -L "https://github.com/ClementTsang/bottom/releases/download/${BOTTOM_VERSION}/bottom_x86_64-unknown-linux-gnu.tar.gz" \
+  curl -fL "https://github.com/ClementTsang/bottom/releases/download/${BOTTOM_VERSION}/bottom_x86_64-unknown-linux-gnu.tar.gz" \
   -o /tmp/bottom.tar.gz && \
   tar -C /usr/local/bin -xzf /tmp/bottom.tar.gz btm && \
   chmod +x /usr/local/bin/btm && \
