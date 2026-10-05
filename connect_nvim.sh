@@ -69,21 +69,64 @@ ensure_master() {
     rm -f "$(ssh -G "$LOGIN_ALIAS" 2>/dev/null | awk '/^controlpath /{print $2}')"
 
     echo "Opening master connection to $LOGIN_ALIAS ..."
-    local err
-    if ! err=$(ssh -o ConnectTimeout=15 -MNf "$LOGIN_ALIAS" 2>&1); then
-        if printf '%s' "$err" | grep -qi 'connection refused\|prohibited'; then
+    # Never capture the master's output with $(...). `-f` backgrounds ssh via
+    # daemon(1, 1) — noclose=1, so stdout/stderr keep pointing at the capture
+    # pipe (the man page's "implies -n" covers stdin only). Command substitution
+    # reads until every write end shuts, so on the SUCCESS path it waits on a
+    # master that ControlPersist keeps alive for 72h: the script hangs right
+    # here, silently, after printing the line above. A file blocks nobody.
+    local err errfile
+    errfile=$(mktemp "${TMPDIR:-/tmp}/circe_master.XXXXXX") || exit 1
+    # NumberOfPasswordPrompts=1: ~/.ssh/config leaves this at the default 3, so a
+    # dial that cannot use the key quietly spends THREE failed auths on the very
+    # login node whose rate limiter is the thing we are rationing. One prompt is
+    # enough to log in by hand; three is just fuel for the next ban.
+    if ! ssh -o ConnectTimeout=15 -o NumberOfPasswordPrompts=1 \
+             -MNf "$LOGIN_ALIAS" </dev/null >/dev/null 2>"$errfile"; then
+        err=$(cat "$errfile")
+        rm -f "$errfile"
+        # "Operation timed out" is the SAME ACL reject as "Connection refused" —
+        # which one you see is just a race between the ICMP admin-prohibited reply
+        # and ConnectTimeout. Matching only "refused" meant a timeout skipped the
+        # backoff stamp entirely, so the natural rerun dialled straight back into a
+        # live block and extended it.
+        if printf '%s' "$err" | grep -qi 'connection refused\|prohibited\|timed out\|timeout'; then
             date +%s > "$REFUSED_STAMP" 2>/dev/null
             echo "" >&2
-            echo "$LOGIN_ALIAS refused the connection." >&2
+            echo "$LOGIN_ALIAS refused or timed out — the same firewall reject." >&2
             echo "" >&2
-            echo "This is a firewall reject, not sshd being down — the source IP is" >&2
-            echo "blocked. Do not rerun in a loop; that extends it. Either wait it" >&2
-            echo "out (~15m, backing off automatically) or reconnect GlobalProtect" >&2
-            echo "to get a new VPN address." >&2
+            echo "This source IP is blocked; sshd is not down. Do not rerun in a loop," >&2
+            echo "that extends it. Either wait it out (~15m, backing off automatically)," >&2
+            echo "reconnect GlobalProtect for a new address, or find what is redialing:" >&2
+            echo "  LC_ALL=C pgrep -fl '^sshfs circe:'   # a stray mount is the usual cause" >&2
+        elif printf '%s' "$err" | grep -q 'Permission denied' &&
+             ! printf '%s' "$err" | grep -q 'Permission denied.*publickey'; then
+            # The parenthesised list in sshd's denial is what the SERVER still
+            # allows. publickey missing from it means pubkey auth is disabled at
+            # the server, not that circe_key is wrong — no amount of local key
+            # fixing helps, and each retry is another failed auth toward a ban.
+            echo "" >&2
+            echo "$LOGIN_ALIAS reachable, but it refused key authentication:" >&2
+            printf '%s\n' "$err" | grep 'Permission denied' | tail -1 >&2
+            echo "" >&2
+            echo "publickey is absent from the methods the server offers, so this is" >&2
+            echo "a server-side change, not a problem with ~/.ssh/circe_key. Log in" >&2
+            echo "by hand (password + Duo) to confirm, and ask rc-help@usf.edu why" >&2
+            echo "publickey is off. Do not loop — each try is a failed auth." >&2
         else
             echo "Could not reach $LOGIN_ALIAS:" >&2
             printf '%s\n' "$err" >&2
         fi
+        exit 1
+    fi
+    rm -f "$errfile"
+
+    # `-f` returns the moment auth succeeds, which is not the same as the control
+    # socket being usable. Confirm it here so a half-open master fails loudly now
+    # instead of making the ProxyJump below dial the login node a second time.
+    if ! ssh -O check "$LOGIN_ALIAS" 2>/dev/null; then
+        echo "Master opened but its control socket is not answering." >&2
+        echo "Not redialing — that is what extends a block. Try again shortly." >&2
         exit 1
     fi
 }
