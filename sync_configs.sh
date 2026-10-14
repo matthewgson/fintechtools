@@ -76,11 +76,10 @@ HAVE_TERM=0;     [ -f "${SCRIPT_DIR}/term_session.sh" ]     && HAVE_TERM=1
 HAVE_UDOCKER=0;  [ -f "${SCRIPT_DIR}/udocker_dev.sh" ]      && HAVE_UDOCKER=1
 HAVE_CLAUDEMD=0; [ -f "${SCRIPT_DIR}/configs/claude/CLAUDE.md" ] && HAVE_CLAUDEMD=1
 HAVE_CONNECT=0;  [ -f "${SCRIPT_DIR}/connect_nvim.sh" ]     && HAVE_CONNECT=1
+HAVE_HERDR=0;    [ -f "$HOME/.config/herdr/config.toml" ]   && HAVE_HERDR=1
 # bookokrat helper scripts. Source the LIVE Mac copies (where they're edited and
-# used) so changes sync without a manual repo update; fall back to the repo-root
-# snapshot. Each row is  LIVE-PATH-UNDER-~ | REPO-ROOT-SNAPSHOT | DEST-UNDER-~ .
-# The repo name is flat even where the destination is nested, so the repo root
-# stays flat — hence the explicit third column.
+# used) so changes sync without a manual repo update; fall back to the repo's
+# local-bin/ snapshot. Each row is  LIVE-PATH-UNDER-~ | REPO-SNAPSHOT | DEST-UNDER-~ .
 #
 # Because the LIVE copy wins, an edit made in this repo alone is thrown away by
 # the next sync. These files are shared between the Mac and the container, so a
@@ -106,11 +105,11 @@ HAVE_CONNECT=0;  [ -f "${SCRIPT_DIR}/connect_nvim.sh" ]     && HAVE_CONNECT=1
 # left empty. Retired on the Mac 2026-09-04 and removed from here with it; do not
 # reintroduce either file.
 BOOKOKRAT_FILES=(
-  ".local/bin/bookokrat-split|bookokrat-split|.local/bin/bookokrat-split"
-  ".local/bin/bookokrat-forward|bookokrat-forward|.local/bin/bookokrat-forward"
-  ".local/bin/bookokrat-inverse|bookokrat-inverse|.local/bin/bookokrat-inverse"
-  ".local/bin/tmux-kitty-image-gc|tmux-kitty-image-gc|.local/bin/tmux-kitty-image-gc"
-  ".local/bin/tmux-resurrect-age|tmux-resurrect-age|.local/bin/tmux-resurrect-age"
+  ".local/bin/bookokrat-split|local-bin/bookokrat-split|.local/bin/bookokrat-split"
+  ".local/bin/bookokrat-forward|local-bin/bookokrat-forward|.local/bin/bookokrat-forward"
+  ".local/bin/bookokrat-inverse|local-bin/bookokrat-inverse|.local/bin/bookokrat-inverse"
+  ".local/bin/tmux-kitty-image-gc|local-bin/tmux-kitty-image-gc|.local/bin/tmux-kitty-image-gc"
+  ".local/bin/tmux-resurrect-age|local-bin/tmux-resurrect-age|.local/bin/tmux-resurrect-age"
 )
 HAVE_BOOKOKRAT_SCRIPTS=1
 for _row in "${BOOKOKRAT_FILES[@]}"; do
@@ -126,6 +125,7 @@ echo "  • ~/.config/{$(IFS=,; echo "${CONFIG_LIST[*]}")} → CIRCE"
 [ "$HAVE_UDOCKER"  -eq 1 ] && echo "  • udocker_dev.sh → CIRCE ~/bin/  (udocker/F3 launcher)"
 [ "$HAVE_CLAUDEMD" -eq 1 ] && echo "  • configs/claude/CLAUDE.md → CIRCE ~/.claude/CLAUDE.md  (container notes for Claude)"
 [ "$HAVE_BOOKOKRAT_SCRIPTS" -eq 1 ] && echo "  • bookokrat helpers → CIRCE ~/.local/bin/  (${#BOOKOKRAT_FILES[@]} files)"
+[ "$HAVE_HERDR"    -eq 1 ] && echo "  • ~/.config/herdr settings + plugins → CIRCE  (no sockets, logs or sessions)"
 [ "$HAVE_CONNECT"  -eq 1 ] && echo "  • connect_nvim.sh → ~/  (local)"
 echo
 
@@ -243,6 +243,35 @@ PY
 fi
 
 [ ${#_ok_cfg[@]} -gt 0 ] && _staged+=("~/.config/{$(IFS=,; echo "${_ok_cfg[*]}")}")
+
+# herdr: the Mac's ~/.config/herdr is the source of truth, but it is herdr's
+# data dir as well as its config dir, so beside config.toml and the plugin
+# registry it holds the live sockets, logs and the saved session layout. Only
+# the settings travel. Plugin checkouts go without their .git (a reinstall
+# replaces them anyway). plugins.json records each plugin by absolute path, so
+# the Mac's $HOME in it is rewritten to CIRCE's; without that home the registry
+# would point at /Users/... and is left out rather than pushed broken.
+if [ "$HAVE_HERDR" -eq 1 ]; then
+  rsync -a --exclude='.git' --include='config.toml' --include='plugins.json' \
+    --include='plugins/***' --exclude='*' "$HOME/.config/herdr/" "$STAGING/.config/herdr/"
+  _remote_home=$(remote_ssh 'printf %s "$HOME"' 2>/dev/null)
+  if [ -f "$STAGING/.config/herdr/plugins.json" ]; then
+    if [ -n "$_remote_home" ]; then
+      sed -i '' "s#\"$HOME/#\"$_remote_home/#g" "$STAGING/.config/herdr/plugins.json"
+    else
+      rm -f "$STAGING/.config/herdr/plugins.json"
+      print_warning "  herdr: could not read CIRCE's \$HOME — plugins.json not synced"
+    fi
+  fi
+  # The tab-row machine label is the one setting that must differ: the Mac shows
+  # an Apple icon and MacOS, so the staged copy gets a server icon and CIRCE. herdr
+  # strips colour from tab_bar_right entries, so the glyph is what tells them apart.
+  sed -i '' 's|^tab_bar_right = .*|tab_bar_right = [{ type = "text", text = "\\uf233  CIRCE" }]   # nf-fa-server|' \
+    "$STAGING/.config/herdr/config.toml"
+  grep -q 'CIRCE' "$STAGING/.config/herdr/config.toml" \
+    || print_warning "  herdr: no tab_bar_right line in config.toml — CIRCE gets no machine label"
+  _staged+=(".config/herdr")
+fi
 
 if [ "$HAVE_ZSHRC" -eq 1 ]; then
   cp "${SCRIPT_DIR}/.zshrc" "$STAGING/.zshrc"

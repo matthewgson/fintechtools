@@ -108,3 +108,18 @@ paths; only the repair half is table-limited.
   absolute host path. So: **static binary → its dynamic children break; unpatched
   dynamic binary → it breaks itself.** Check `readelf -l <bin> | grep interpreter`
   to tell them apart.
+
+  `herdr` is the exception that proves the rule: the image builds it from source
+  as a dynamic binary because the static release would break every pane. Do not
+  `herdr update` or install the release binary here.
+
+  A static binary also *reads* the host tree, which broke Quarto:
+  `cannot open /opt/quarto/share/filters/qmd-reader.lua: No such file or
+  directory` from its bundled static pandoc (typst had the same problem with
+  its fonts and packages). The image now replaces both with dynamic builds of
+  the same versions. If that error comes back, `file
+  /opt/quarto/bin/tools/x86_64/pandoc` will say "statically linked", which means
+  the container predates the fix and needs the rebuilt image. Do not suggest udocker P1/proot (slow) or
+  `QUARTO_PANDOC=/usr/bin/pandoc` (3.1.3 is too old). Paths under `$HOME`,
+  `/work` and `/tmp` look the same from both sides, so a static tool that only
+  reads those is fine.

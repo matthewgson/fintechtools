@@ -1,6 +1,11 @@
 # Fintech Tools Container
 # Base: Ubuntu 24.04 LTS (Noble Numbat) — headless server edition
 
+# The pandoc that replaces Quarto's bundled one (Stage -1c). Global because a
+# FROM line can only expand an ARG declared before the first FROM.
+# build_container.sh passes the version the resolved Quarto release pins.
+ARG QUARTO_PANDOC_VERSION=3.10
+
 # ─── Stage -1: static git (musl) for lazygit's fakechroot escape ────────────
 # lazygit is a Go binary; under udocker's F3 fakechroot its exec() of `git`
 # bypasses the LD_PRELOAD hook and resolves against the RHEL7 *host* (the same
@@ -49,10 +54,94 @@ RUN apk add --no-cache \
   [ -z "$(readelf -l /opt/git-static/bin/git | grep -i interpreter)" ] && \
   /opt/git-static/bin/git version
 
+# ─── Stage -1b: herdr (agent multiplexer) as a DYNAMIC glibc binary ─────────
+# herdr's Linux release asset is a static-pie musl binary — the lazygit/gh
+# escape again, but worse: everything a multiplexer does is spawn children
+# (every pane's $SHELL, `/bin/sh -c` for custom commands, `bash` for plugin
+# actions), and a static parent never loads libfakechroot, so each of those
+# would resolve against the RHEL7 host and die on the glibc loader mismatch.
+# Built for x86_64-unknown-linux-gnu instead, against 24.04's glibc 2.39, it is
+# an ordinary dynamic ELF: F3 patches its PT_INTERP like nvim's, LD_PRELOAD
+# loads, and its children stay inside the container — exactly like tmux.
+#
+# The stage runs on the BUILD machine's arch and cross-compiles: under amd64
+# emulation on an arm64 Mac, rustc + zig would take far longer than the rest of
+# the image. Rust comes from herdr's own rust-toolchain.toml, and Zig (which
+# builds the vendored libghostty-vt) from the version its build.zig.zon asks
+# for, so a herdr bump needs no edit here.
+FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS herdrbuild
+ARG BUILDARCH
+ARG HERDR_VERSION=latest
+ENV DEBIAN_FRONTEND=noninteractive \
+  RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:/opt/zig:$PATH
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  ca-certificates curl git xz-utils build-essential pkg-config && \
+  if [ "$BUILDARCH" != amd64 ]; then \
+  apt-get install -y --no-install-recommends gcc-x86-64-linux-gnu libc6-dev-amd64-cross; fi && \
+  rm -rf /var/lib/apt/lists/*
+RUN git clone -q --depth 1 --branch "${HERDR_VERSION}" https://github.com/herdrdev/herdr /src/herdr && \
+  cd /src/herdr && \
+  ZIG_VERSION=$(sed -n 's/.*minimum_zig_version = "\(.*\)".*/\1/p' vendor/libghostty-vt/build.zig.zon) && \
+  case "$BUILDARCH" in arm64) zarch=aarch64 ;; amd64) zarch=x86_64 ;; \
+  *) echo "ERROR: no Zig build for build arch $BUILDARCH" >&2; exit 1 ;; esac && \
+  echo "Building herdr ${HERDR_VERSION} with Zig ${ZIG_VERSION} on ${zarch}" && \
+  mkdir -p /opt/zig && \
+  curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${zarch}-linux-${ZIG_VERSION}.tar.xz" \
+  | tar -xJ -C /opt/zig --strip-components=1 && \
+  curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none && \
+  rustup toolchain install && \
+  rustup target add x86_64-unknown-linux-gnu && \
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc \
+  cargo build --release --locked --target x86_64-unknown-linux-gnu && \
+  install -m 0755 target/x86_64-unknown-linux-gnu/release/herdr /opt/herdr
+
+# ─── Stage -1c: Quarto's pandoc + typst as DYNAMIC glibc binaries ───────────
+# Quarto's tarball ships a dynamic deno beside a static pandoc and a static-pie
+# musl typst. deno runs under libfakechroot and hands those two container paths
+# (Lua filters and templates, typst's --font-path/--package-path, all under
+# /opt/quarto/share). A static binary never loads libfakechroot, so it opens
+# them on the RHEL7 host, where /opt/quarto does not exist, and every render
+# fails. There is no relocation error here, only missing files. The fix is the
+# same one herdr got: swap each for a dynamic build of the SAME version, which
+# F3 patches and LD_PRELOAD reaches like any other tool. Stage 5c swaps them
+# in and fails the build on a version mismatch. apt's pandoc is no substitute:
+# 24.04's 3.1.3 is far older than Quarto supports.
+#   pandoc  pandoc/core's -ubuntu flavour is built on 24.04 itself: dynamic
+#           against libc/libm/libz/libgmp/liblua5.4, with its data files embedded.
+#   typst   upstream publishes only musl for x86_64 Linux, so it is built here,
+#           cross-compiled like herdr. vendor-openssl matches typst's own
+#           release build, which keeps libssl-dev:amd64 out of the builder.
+# esbuild (static Go) stays as shipped. It only reads the project dir and /tmp,
+# which are bound 1:1, so the host sees the same files the container does.
+FROM docker.io/pandoc/core:${QUARTO_PANDOC_VERSION}-ubuntu AS pandocdyn
+
+FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS typstbuild
+ARG BUILDARCH
+ARG QUARTO_TYPST_VERSION=0.15.1
+ENV DEBIAN_FRONTEND=noninteractive \
+  RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH \
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc \
+  CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc \
+  AR_x86_64_unknown_linux_gnu=x86_64-linux-gnu-ar
+# perl + make: vendored OpenSSL's Configure.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  ca-certificates curl git build-essential pkg-config perl && \
+  if [ "$BUILDARCH" != amd64 ]; then \
+  apt-get install -y --no-install-recommends gcc-x86-64-linux-gnu libc6-dev-amd64-cross; fi && \
+  rm -rf /var/lib/apt/lists/*
+RUN git clone -q --depth 1 --branch "v${QUARTO_TYPST_VERSION}" https://github.com/typst/typst /src/typst && \
+  cd /src/typst && \
+  echo "Building typst ${QUARTO_TYPST_VERSION}" && \
+  curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable \
+  --target x86_64-unknown-linux-gnu && \
+  cargo build --release --locked -p typst-cli --features vendor-openssl \
+  --target x86_64-unknown-linux-gnu && \
+  install -m 0755 target/x86_64-unknown-linux-gnu/release/typst /opt/typst
+
 FROM ubuntu:24.04
 
 LABEL maintainer="Matthew Son"
-LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Claude Code CLI + TinyTeX + bookokrat"
+LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Claude Code CLI + TinyTeX + bookokrat + herdr"
 LABEL version="0.8"
 
 # ─── Version pins — bump here to upgrade any tool ────────────────────────────
@@ -79,26 +168,23 @@ ARG FZF_VERSION=latest
 ARG ZOXIDE_VERSION=latest
 ARG BOTTOM_VERSION=latest
 # bookokrat = terminal PDF/EPUB reader (kitty graphics); the primary VimTeX/yazi
-# viewer now — renders in-terminal over SSH, no X11/XQuartz. Pinned to the Mac.
+# viewer now — renders in-terminal over SSH, no X11/XQuartz. Comes from the
+# matthewgson/bookokrat fork (tags vX.Y.Z-fork.N), not upstream: see Stage 5f.
 ARG BOOKOKRAT_VERSION=latest
+# duckdb CLI = replstudio.nvim's parquet viewer (`:e data.parquet` → table).
+ARG DUCKDB_VERSION=latest
 # catppuccin/tmux = tmux status-bar theme, baked into the image and sourced
 # directly (no TPM at runtime). Pinned to match the Mac (which tracks "latest").
 ARG CATPPUCCIN_TMUX_VERSION=latest
 # Session persistence for tmux (prefix Ctrl-s save / Ctrl-r restore, manual
 # only). Baked like catppuccin and sourced directly from configs/tmux/tmux.conf
-# — no TPM. resurrect does the work; continuum (the autosave timer and the
-# auto-restore hook) is baked in but deliberately NOT sourced, so turning
-# autosave back on is a tmux.conf edit rather than a rebuild.
+# — no TPM.
 ARG TMUX_RESURRECT_VERSION=latest
-ARG TMUX_CONTINUUM_VERSION=latest
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=America/New_York
 ENV LC_ALL=C.UTF-8
 ENV LANG=C.UTF-8
-
-# Singularity library path (preserved for HPC compatibility)
-ENV LD_LIBRARY_PATH="/.singularity.d/libs:$LD_LIBRARY_PATH"
 
 WORKDIR /work/g/gson
 
@@ -132,8 +218,8 @@ RUN apt-get update && \
   autoconf \
   automake \
   libtool \
-  # Java (H2O dependency)
-  openjdk-21-jdk \
+  # Java runtime for H2O (the h2o R package runs `java -jar`; no JDK needed)
+  openjdk-21-jre-headless \
   # Compression / networking
   libcurl4-openssl-dev \
   libssl-dev \
@@ -144,18 +230,15 @@ RUN apt-get update && \
   libzstd-dev \
   libsnappy-dev \
   xz-utils \
-  # XML / protobuf
+  # XML
   libxml2-dev \
   libxml2-utils \
-  libprotobuf-dev \
-  protobuf-compiler \
   # BLAS / LAPACK
   libblas-dev \
   liblapack-dev \
   libopenblas-dev \
-  # FFI / HDF5
+  # FFI
   libffi-dev \
-  libhdf5-dev \
   # Graphics / font libs (R + image previews)
   libfontconfig1-dev \
   libfreetype6-dev \
@@ -167,10 +250,9 @@ RUN apt-get update && \
   libfribidi-dev \
   libharfbuzz-dev \
   libgit2-dev \
-  # Database / ODBC (RPostgres, RSQLite, RODBC/odbc)
+  # Database (RPostgres for WRDS, RSQLite)
   libpq-dev \
   libsqlite3-dev \
-  unixodbc-dev \
   # Neovim / LazyVim CLI deps
   ripgrep \
   fd-find \
@@ -188,12 +270,15 @@ RUN apt-get update && \
   ncurses-bin \
   # General utilities
   pandoc \
+  # Quarto's dynamic pandoc (Stage -1c) links Lua 5.4 as a shared library
+  liblua5.4-0 \
   git \
   rsync \
   # (tmux is NOT installed from apt — built from source in Stage 8g below,
   #  because 24.04 pins tmux 3.4 which is too old for ghostty's CSI-u keys.)
   nano \
-  vim \
+  # `vi` only — `vim` is aliased to nvim in .zshrc
+  vim-tiny \
   wget \
   curl \
   openssh-client \
@@ -327,8 +412,13 @@ RUN Rscript -e 'install.packages("languageserver")' && \
   echo "languageserver $(Rscript -e 'cat(as.character(packageVersion("languageserver")))') installed into $(Rscript -e 'cat(find.package("languageserver"))')"
 
 # ─── Stage 5c: Quarto (scientific publishing — .qmd → PDF/HTML/Word) ────────
-# Quarto bundles its own pandoc and Deno runtime.  LaTeX for PDF output is
-# provided by Stage 5d (TinyTeX) below.
+# Quarto bundles its own pandoc, typst and Deno runtime.  LaTeX for PDF output
+# is provided by Stage 5d (TinyTeX) below.  The bundled pandoc and typst are
+# static, which cannot see the container's files under F3, so they are replaced
+# with Stage -1c's dynamic builds.  The build stops if either one's version
+# differs from what this Quarto release shipped.
+COPY --from=pandocdyn /usr/local/bin/pandoc /opt/quarto-dyn/pandoc
+COPY --from=typstbuild /opt/typst /opt/quarto-dyn/typst
 RUN QUARTO_VERSION=${QUARTO_VERSION} && \
   echo "Installing Quarto ${QUARTO_VERSION}" && \
   curl -fL "https://github.com/quarto-dev/quarto-cli/releases/download/v${QUARTO_VERSION}/quarto-${QUARTO_VERSION}-linux-amd64.tar.gz" \
@@ -341,6 +431,22 @@ RUN QUARTO_VERSION=${QUARTO_VERSION} && \
   printf '#!/bin/sh\nexec /opt/quarto/bin/quarto "$@"\n' > /usr/local/bin/quarto && \
   chmod +x /usr/local/bin/quarto && \
   rm /tmp/quarto.tar.gz && \
+  T=/opt/quarto/bin/tools/x86_64 && \
+  for t in pandoc typst; do \
+  want=$("$T/$t" --version | awk 'NR==1 {print $2}'); \
+  got=$("/opt/quarto-dyn/$t" --version | awk 'NR==1 {print $2}'); \
+  if [ -z "$want" ] || [ "$want" != "$got" ]; then \
+  echo "ERROR: Quarto ${QUARTO_VERSION} ships $t '$want' but Stage -1c's build reports '$got'." >&2; \
+  echo "  build_container.sh passes the matching versions. For a direct build, pass" >&2; \
+  echo "  --build-arg QUARTO_PANDOC_VERSION / QUARTO_TYPST_VERSION (pinned in quarto-cli's configuration file)." >&2; \
+  exit 1; fi; \
+  if ! file -L "/opt/quarto-dyn/$t" | grep -q 'dynamically linked'; then \
+  echo "ERROR: Stage -1c's $t is not a dynamic ELF, so it would escape F3 like the bundled one." >&2; \
+  exit 1; fi; \
+  install -m 0755 "/opt/quarto-dyn/$t" "$T/$t" || exit 1; \
+  echo "Quarto's $t $want → dynamic build"; \
+  done && \
+  rm -rf /opt/quarto-dyn && \
   /usr/local/bin/quarto --version
 
 # ─── Stage 5d: TinyTeX (LaTeX for Quarto / RMarkdown / VimTeX PDF output) ───
@@ -413,11 +519,23 @@ RUN apt-get update && \
 # Terminal reader that draws PDFs inline via the kitty graphics protocol, which
 # ghostty speaks — so VimTeX/yazi PDF viewing works straight over SSH with no
 # X11/XQuartz (no X server needed at all). Prebuilt static-ish
-# x86_64 gnu binary from upstream releases; the synctex wrapper scripts
+# x86_64 gnu binary; the synctex wrapper scripts
 # (bookokrat-forward/-split/-inverse) ship via sync_configs.sh into ~/.local/bin.
+#
+# The binary comes from the user's FORK's releases (matthewgson/bookokrat), not
+# from upstream. When the terminal can't read bookokrat's shared memory, which
+# is always the case over SSH, upstream sends every PDF page as ~18 MB of raw
+# RGB, so a page turn took ~2 s. The fork zlib-compresses those images (Kitty
+# o=z), and a page turn takes ~0.2–0.4 s (measured 2026-10-12). Its release
+# workflow builds the same tarball upstream ships, so only the repo differs
+# here. To follow a new upstream release: rebase the fork's main onto it, then
+# push a vX.Y.Z-fork.N tag. The workflow publishes the tarball, and
+# build_container.sh resolves the fork's latest release. The Mac keeps
+# Homebrew's upstream build: locally it uses shared memory, so the patch
+# doesn't apply there.
 RUN BOOKOKRAT_VERSION=${BOOKOKRAT_VERSION} && \
-  echo "Installing bookokrat ${BOOKOKRAT_VERSION}" && \
-  curl -fL "https://github.com/bugzmanov/bookokrat/releases/download/${BOOKOKRAT_VERSION}/bookokrat-${BOOKOKRAT_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+  echo "Installing bookokrat ${BOOKOKRAT_VERSION} (matthewgson fork)" && \
+  curl -fL "https://github.com/matthewgson/bookokrat/releases/download/${BOOKOKRAT_VERSION}/bookokrat-${BOOKOKRAT_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
   -o /tmp/bookokrat.tar.gz && \
   mkdir -p /tmp/bookokrat-x && \
   tar -C /tmp/bookokrat-x -xzf /tmp/bookokrat.tar.gz && \
@@ -519,6 +637,22 @@ RUN BOTTOM_VERSION=${BOTTOM_VERSION} && \
   chmod +x /usr/local/bin/btm && \
   rm /tmp/bottom.tar.gz
 
+# ─── Stage 8e-2: duckdb CLI (replstudio.nvim's parquet viewer) ──────────────
+# replstudio.nvim opens `.parquet` buffers as a read-only table through one
+# `duckdb` call, which reads the footer and the first row group(s) only.
+# Do NOT run `duckdb --version` here: like Bun (Stage 11), duckdb segfaults
+# under the QEMU emulation this amd64 image is built in on the arm64 Mac
+# ("qemu: uncaught target signal 11", exit 139 — failed the 2026-10-14 build).
+# `file` checks it is an x86-64 ELF without executing it.
+RUN DUCKDB_VERSION=${DUCKDB_VERSION} && \
+  echo "Installing duckdb ${DUCKDB_VERSION}" && \
+  curl -fL "https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" \
+  -o /tmp/duckdb.zip && \
+  unzip -o -d /usr/local/bin /tmp/duckdb.zip duckdb && \
+  chmod +x /usr/local/bin/duckdb && \
+  rm /tmp/duckdb.zip && \
+  file /usr/local/bin/duckdb | grep -q 'ELF 64-bit LSB.*x86-64'
+
 # ─── Stage 8f: catppuccin/tmux theme (status bar) ───────────────────────────
 # tmux status-bar theme, baked into the image so the container's bar matches the
 # Mac's. configs/tmux/tmux.conf sources it directly from this path (no TPM, no
@@ -532,18 +666,15 @@ RUN CATPPUCCIN_TMUX_VERSION=${CATPPUCCIN_TMUX_VERSION} && \
   rm /tmp/catppuccin-tmux.tar.gz && \
   { [ -f /usr/local/share/tmux-plugins/catppuccin/catppuccin.tmux ] || { echo "ERROR: catppuccin.tmux missing after extract" >&2; exit 1; }; }
 
-# ─── tmux session persistence: resurrect (+ continuum, parked) ──────────────
+# ─── tmux session persistence: resurrect ────────────────────────────────────
 # Same treatment as catppuccin: extracted to /usr/local/share/tmux-plugins and
 # sourced directly by configs/tmux/tmux.conf, so no TPM and no plugin clone on
-# the slow network home. Only resurrect is sourced there — save and restore are
-# manual (prefix Ctrl-s / Ctrl-r). continuum, which arms the autosave timer and
-# the auto-restore-on-start hook, is still installed but left unsourced: keeping
-# it in the image makes re-enabling autosave a config edit, not a rebuild.
+# the slow network home. Save and restore are manual (prefix Ctrl-s / Ctrl-r);
+# continuum (autosave) is not installed — herdr is the layout keeper now.
 # Saved state still lives on $HOME (see @resurrect-dir in tmux.conf) — that is
 # deliberate, so a layout survives the compute node changing.
 RUN set -eu; \
-  for p in "tmux-resurrect:${TMUX_RESURRECT_VERSION}:resurrect.tmux" \
-  "tmux-continuum:${TMUX_CONTINUUM_VERSION}:continuum.tmux"; do \
+  for p in "tmux-resurrect:${TMUX_RESURRECT_VERSION}:resurrect.tmux"; do \
   name="${p%%:*}"; rest="${p#*:}"; ver="${rest%%:*}"; entry="${rest#*:}"; \
   echo "Installing tmux-plugins/${name} ${ver}"; \
   mkdir -p "/usr/local/share/tmux-plugins/${name}"; \
@@ -617,6 +748,12 @@ RUN tic -x -o /usr/share/terminfo /tmp/xterm-ghostty.src && \
   rm /tmp/xterm-ghostty.src && \
   infocmp xterm-ghostty >/dev/null && echo "xterm-ghostty terminfo installed"
 
+# ─── Stage 8i: herdr (agent multiplexer, built in Stage -1b) ─────────────────
+# The smoke test checks it really is dynamic: a PT_INTERP means F3 will patch it.
+COPY --from=herdrbuild /opt/herdr /usr/local/bin/herdr
+RUN readelf -l /usr/local/bin/herdr | grep -q 'program interpreter' && \
+  herdr --version
+
 # NOTE: no glibc-matched libfakechroot is baked in for udocker's F3 mode. Under
 # F3, glibc NSS getpwuid() can't resolve our uid, so id/whoami show a bare number
 # (cosmetic — udocker_dev.sh exports USER/LOGNAME; every tool works). The proper
@@ -681,12 +818,6 @@ RUN mkdir -p -m 755 /etc/apt/keyrings && \
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
   tree-sitter-cli && \
   npm ls -g --depth=0 @anthropic-ai/claude-code || true
-
-# ─── Stage 11a: (removed) claude-auto-retry ──────────────────────────────────
-# Dropped 2026-08-21 at the user's request — no auto-resume when a rate limit is
-# hit. The package, and the `claude()` wrapper it needed in the repo's .zshrc,
-# are both gone; `claude` is now the plain binary (via the launcher wrapper that
-# udocker_dev.sh installs — see the claude block there).
 
 # ─── Stage 11b: Starship prompt ──────────────────────────────────────────────
 RUN curl -sS https://starship.rs/install.sh | sh -s -- --yes

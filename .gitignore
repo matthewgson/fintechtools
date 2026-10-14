@@ -1,0 +1,3 @@
+# Editor/installer backups — the history lives in git.
+*.bak
+*.bak.*

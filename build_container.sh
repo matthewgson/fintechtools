@@ -248,6 +248,7 @@ resolve_latest_versions() {
 #   keep  = the tag exactly as published
 #   tags  = tag-only repo (no GitHub Releases): newest v* tag via ls-remote
 # Override any one by exporting it, e.g. UV_VERSION=0.11.21 ./build_container.sh
+# bookokrat resolves from the user's fork, not upstream (Dockerfile Stage 5f says why).
 TOOL_VERSIONS='
 UV_VERSION              astral-sh/uv                 keep
 QUARTO_VERSION          quarto-dev/quarto-cli        strip
@@ -257,14 +258,15 @@ RESVG_VERSION           linebender/resvg             strip
 FZF_VERSION             junegunn/fzf                 strip
 ZOXIDE_VERSION          ajeetdsouza/zoxide           strip
 BOTTOM_VERSION          ClementTsang/bottom          keep
-BOOKOKRAT_VERSION       bugzmanov/bookokrat          keep
+BOOKOKRAT_VERSION       matthewgson/bookokrat        keep
+HERDR_VERSION           herdrdev/herdr               keep
+DUCKDB_VERSION          duckdb/duckdb                keep
 CATPPUCCIN_TMUX_VERSION catppuccin/tmux              keep
 TMUX_RESURRECT_VERSION  tmux-plugins/tmux-resurrect  tags
-TMUX_CONTINUUM_VERSION  tmux-plugins/tmux-continuum  tags
 '
 
 resolve_tool_versions() {
-  local var repo mode ver summary=""
+  local var repo mode ver bk="" qv="" summary=""
   while read -r var repo mode; do
     [ -n "$var" ] || continue
     ver="${!var:-}"
@@ -282,13 +284,56 @@ resolve_tool_versions() {
     fi
     if [ -z "$ver" ]; then
       print_error "Could not resolve the latest ${repo} release for ${var}."
+      [ "$var" = BOOKOKRAT_VERSION ] && \
+        print_status "A fork tag becomes a release only once its Actions run publishes it: https://github.com/${repo}/actions"
       print_status "Pin it and re-run, e.g.: ${var}=<version> $0"
       exit 1
     fi
+    [ "$var" = BOOKOKRAT_VERSION ] && bk="$ver"
+    [ "$var" = QUARTO_VERSION ] && qv="$ver"
     BUILD_ARGS+=( --build-arg "${var}=${ver}" )
     summary="${summary} ${repo##*/}=${ver}"
   done <<< "$TOOL_VERSIONS"
   print_status "Resolved tool versions →${summary}"
+
+  resolve_quarto_tools "$qv"
+
+  # The fork's release is assembled by its own workflow, one upload per matrix
+  # target, so a release can exist without the linux-gnu tarball Stage 5f
+  # fetches (that job failed, or is still running). Catch it here, not as a 404
+  # halfway through the build.
+  if ! curl -fsSLI -o /dev/null \
+       "https://github.com/matthewgson/bookokrat/releases/download/${bk}/bookokrat-${bk}-x86_64-unknown-linux-gnu.tar.gz" 2>/dev/null; then
+    print_error "bookokrat ${bk} has no x86_64-unknown-linux-gnu tarball on matthewgson/bookokrat."
+    print_status "Wait for its release workflow (https://github.com/matthewgson/bookokrat/actions), or pin BOOKOKRAT_VERSION to an earlier fork tag."
+    exit 1
+  fi
+}
+
+# Quarto's static pandoc and typst are replaced with dynamic builds of the same
+# versions (Dockerfile Stage -1c), so those versions follow the Quarto release.
+# quarto-cli pins them in its `configuration` file, the one its own packaging
+# sources. Stage 5c re-checks the result against the binaries actually shipped,
+# so a bad read here fails the build instead of producing an image that is subtly wrong.
+resolve_quarto_tools() {
+  local qv="$1" conf pandoc typst
+  conf=$(curl -fsSL "https://raw.githubusercontent.com/quarto-dev/quarto-cli/v${qv}/configuration" 2>/dev/null || true)
+  pandoc="${QUARTO_PANDOC_VERSION:-$(printf '%s\n' "$conf" | sed -n 's/^export PANDOC=["'\'']*\([^"'\'' ]*\).*/\1/p')}"
+  typst="${QUARTO_TYPST_VERSION:-$(printf '%s\n' "$conf" | sed -n 's/^export TYPST=["'\'']*\([^"'\'' ]*\).*/\1/p')}"
+  if [ -z "$pandoc" ] || [ -z "$typst" ]; then
+    print_error "Could not read Quarto ${qv}'s pandoc/typst pins from quarto-cli's configuration file."
+    print_status "Pin them and re-run, e.g.: QUARTO_PANDOC_VERSION=3.10 QUARTO_TYPST_VERSION=0.15.1 $0"
+    exit 1
+  fi
+  # pandoc/core publishes an -ubuntu tag per pandoc release, but only some time
+  # after the release itself. Catch a missing tag here, not as a failed pull.
+  if ! curl -fsS -o /dev/null "https://hub.docker.com/v2/repositories/pandoc/core/tags/${pandoc}-ubuntu" 2>/dev/null; then
+    print_error "Quarto ${qv} pins pandoc ${pandoc}, but there is no pandoc/core:${pandoc}-ubuntu image."
+    print_status "Pin QUARTO_VERSION to an earlier release until pandoc/core publishes it."
+    exit 1
+  fi
+  BUILD_ARGS+=( --build-arg "QUARTO_PANDOC_VERSION=${pandoc}" --build-arg "QUARTO_TYPST_VERSION=${typst}" )
+  print_status "Quarto ${qv} pins → pandoc ${pandoc}, typst ${typst} (rebuilt dynamic)"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

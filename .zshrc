@@ -1,6 +1,5 @@
 export XDG_CONFIG_HOME="$HOME/.config"
 export PATH=$HOME/local/bin:$PATH
-export DYLD_LIBRARY_PATH=${HOME}/local/lib:$DYLD_LIBRARY_PATH
 export EDITOR=nvim
 
 # Container: glibc loads locale data from the HOST path, so point LOCPATH at the
@@ -25,23 +24,8 @@ function y() {
 }
 export PATH="$HOME/.local/bin:$PATH"
 
-# === bookokrat: the name on $PATH is the real binary ========================
-# /usr/local/bin/bookokrat, installed by the image. Nothing shadows it, and
-# nothing should: the ~/.local/bin/override/bookokrat wrapper that briefly
-# existed on both machines is retired. It answered bookokrat's outer-terminal
-# probe with "kitty" to force the Unicode-placeholder anchor path on, and
-# Ghostty 1.3.1 does not implement the relative placements that path emits
-# (Kitty keys P=/Q=) — it drops them and paints the page wherever the cursor
-# sits, which is on top of yazi, leaving the reader's own pane empty. Retired
-# on the Mac 2026-09-04; it was never viable here anyway, since the anchor path
-# is implemented only over SHM transmission and bookokrat's shm object lives in
-# /dev/shm on the compute node while Ghostty runs on the Mac.
-#
-# The ghost page that wrapper was written to prevent — a page left painted over
-# the window you switched to (bookokrat#179) — is handled instead by
-# ~/.local/bin/tmux-kitty-image-gc, which configs/tmux/tmux.conf calls from the
-# window-change hooks and bookokrat-split appends to the reader's own command
-# line for the exit case.
+# bookokrat on $PATH is the image's real /usr/local/bin/bookokrat. The old
+# ~/.local/bin/override wrapper is retired; see CLAUDE.md before reviving it.
 typeset -U path   # re-sourcing .zshrc must not stack duplicate PATH entries
 
 # === Zoxide Initialization ===
@@ -59,11 +43,6 @@ export STARSHIP_CONFIG="$HOME/.config/starship/starship.toml"
 (( ${+functions[prompt_starship_precmd]} )) || eval "$(starship init zsh)"
 
 # fzf Integration
-# Use command substitution (eval "$(...)") rather than process substitution
-# (source <(...)). Under proot the latter opens /proc/self/fd/NN, which proot
-# does not back with a real file — yielding
-#   .zshrc:source:NN: no such file or directory: /proc/self/fd/15
-# in every interactive shell (including each tmux pane). eval avoids the fd.
 if command -v fzf >/dev/null 2>&1; then
   eval "$(fzf --zsh)"
 fi
@@ -96,41 +75,31 @@ if [ -n "${container_uuid:-}" ] && [ -f "$HOME/.local/lib/dns-proxy.cjs" ]; then
 fi
 
 # === Persistent tmux in one command ==========================================
-# tmux replaced zellij here: a fresh tmux session creates in ~0.03s even under
-# proot, where a fresh zellij create cost ~1.3-1.5s (its WASM plugin runtime +
-# async plugin handshake fire thousands of syscalls at create, each ptraced by
-# PROOT_NO_SECCOMP=1). So fresh launches are no longer the bottleneck.
-# `tm` still gives one-command persistence across reconnects: new-session -A
-# ATTACHES to the named session if it's live (reusing your panes), else creates
-# it. Pass a name to use a session other than `main`.
+# new-session -A ATTACHES to the named session if it's live (reusing your
+# panes), else creates it. Pass a name to use a session other than `main`.
 tm() { tmux new-session -A -s "${1:-main}"; }
 
-# === Self-heal nvim plugins reaped by /tmp's age-cleaner ======================
-# nvim's plugin store (~/.local/share/nvim) is symlinked to node-local /tmp for
-# fast startup (see the image's /etc/zsh/zshenv). But systemd-tmpfiles
-# age-prunes /tmp (/usr/lib/tmpfiles.d/tmp.conf: `D /tmp ... 30d`), so on a
-# long-lived node it deletes the thousands of individual plugin *source* files
-# while leaving each plugin's compact .git intact. LazyVim then sees the plugin
-# as installed and runs its `config`, but require() can't find the module →
-# "module not found" for nvim-treesitter / trouble / blink.cmp / R.nvim / ….
-#
-# `git checkout -f` rebuilds each working tree from the surviving local git
-# objects — offline, instant, no re-clone — and leaves untracked files (blink's
-# native *.so) alone. Canary-gated: a healthy launch costs only a few
-# stat()s; the full restore runs only when a hot plugin's worktree was reaped.
-#
-# 2026-08-10: this guard failed and nvim died with "No specs found for module
-# lazyvim.plugins". Two independent bugs, both fixed below.
-#   1. The canary list missed. The reaper ate LazyVim/lua/lazyvim/plugins/*.lua
-#      while lua/lazyvim/init.lua — the canary — survived, so hit stayed 0. Any
-#      hardcoded list has this hole: /tmp is pruned by ATIME, so the files that
-#      die are precisely the COLD ones, and a canary is only useful if it is
-#      colder than everything it guards.
-#   2. Even had it fired, `git checkout -f` would have restored nothing. An
-#      interrupted fetch/gc had left 0-byte pack .idx/.pack files in 6 repos;
-#      git then fails EVERY object lookup there ("index file ... is too small").
-#      Since the loop sends stderr to /dev/null and ignores the exit status,
-#      that failure was completely silent.
+# === herdr (container only) ===================================================
+# herdr keeps its sockets in ~/.config/herdr by default, which here is the slow
+# network home shared by every node. Keep them on node-local /tmp like tmux's
+# (the client socket is derived from this path), and touch them at each shell
+# start so /tmp's age-reaper never takes a live server's socket.
+# `herdr update` would swap the image's dynamic build for the static release
+# binary, which breaks every pane (see the Dockerfile's herdr stage), so it is
+# refused here: upgrade by rebuilding the image.
+if [ -n "${container_uuid:-}" ]; then
+  export HERDR_SOCKET_PATH="/tmp/${USER}/herdr/herdr.sock"
+  mkdir -p -m 700 "${HERDR_SOCKET_PATH:h}" 2>/dev/null
+  touch -c "$HERDR_SOCKET_PATH" "${HERDR_SOCKET_PATH:h}/herdr-client.sock" 2>/dev/null
+  herdr() {
+    if [ "$1" = update ]; then
+      print -u2 "herdr: no self-update in the container — rebuild the image (build_container.sh)."
+      return 1
+    fi
+    command herdr "$@"
+  }
+fi
+
 # === Un-stick a lazy.nvim clone that was interrupted =========================
 # Nothing to do with the /tmp reaper below, and it is worth knowing the two
 # apart because they present almost identically — a plugin that behaves as
@@ -175,6 +144,32 @@ _nvim_unstick_clones() {
   done
 }
 
+# === Self-heal nvim plugins reaped by /tmp's age-cleaner ======================
+# nvim's plugin store (~/.local/share/nvim) is symlinked to node-local /tmp for
+# fast startup (see the image's /etc/zsh/zshenv). But systemd-tmpfiles
+# age-prunes /tmp (/usr/lib/tmpfiles.d/tmp.conf: `D /tmp ... 30d`), so on a
+# long-lived node it deletes the thousands of individual plugin *source* files
+# while leaving each plugin's compact .git intact. LazyVim then sees the plugin
+# as installed and runs its `config`, but require() can't find the module →
+# "module not found" for nvim-treesitter / trouble / blink.cmp / R.nvim / ….
+#
+# `git checkout -f` rebuilds each working tree from the surviving local git
+# objects — offline, instant, no re-clone — and leaves untracked files (blink's
+# native *.so) alone. Canary-gated: a healthy launch costs only a few
+# stat()s; the full restore runs only when a hot plugin's worktree was reaped.
+#
+# 2026-08-10: this guard failed and nvim died with "No specs found for module
+# lazyvim.plugins". Two independent bugs, both fixed below.
+#   1. The canary list missed. The reaper ate LazyVim/lua/lazyvim/plugins/*.lua
+#      while lua/lazyvim/init.lua — the canary — survived, so hit stayed 0. Any
+#      hardcoded list has this hole: /tmp is pruned by ATIME, so the files that
+#      die are precisely the COLD ones, and a canary is only useful if it is
+#      colder than everything it guards.
+#   2. Even had it fired, `git checkout -f` would have restored nothing. An
+#      interrupted fetch/gc had left 0-byte pack .idx/.pack files in 6 repos;
+#      git then fails EVERY object lookup there ("index file ... is too small").
+#      Since the loop sends stderr to /dev/null and ignores the exit status,
+#      that failure was completely silent.
 _nvim_heal() {
   local lazy="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/lazy"
   [ -d "$lazy" ] || return 0

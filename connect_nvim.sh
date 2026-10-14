@@ -7,8 +7,11 @@
 #   ./connect_nvim.sh <node>       # connect directly to a known node
 #
 # Drops into an interactive zsh inside the container (launched via udocker).
-# Start tmux/nvim manually from there if you want a persistent layout:
-#   tm   (= tmux new-session -A -s main; attaches if it already exists)
+# Start herdr from there for a persistent layout:
+#   herdr   (attaches to the running server, or starts one and restores the
+#            layout saved in ~/.config/herdr/session.json)
+# Every connect runs the /tmp-reaper repair first (udocker_dev.sh), whichever
+# multiplexer you then attach to, so always come back in through this script.
 #
 # Requires:
 #   ~/.ssh/config entry for Host circe with IdentityFile ~/.ssh/circe_key
@@ -160,7 +163,7 @@ else
 fi
 
 echo "Connecting to container on $NODE ..."
-echo "(Inside the container, start tmux manually if you want: tm)"
+echo "(Inside the container, attach to your layout: herdr)"
 echo ""
 
 # ─── Capture local terminal dimensions ───────────────────────────────────────
@@ -177,7 +180,7 @@ unset _sz
 # Uses the compute node's native SSH (no container sshd needed).
 # Drops into interactive zsh (`-i`) so /etc/zsh/zshrc is sourced (aliases,
 # starship, zoxide).  /etc/zsh/zshenv (PATH, XDG_*, EDITOR, SHELL) is sourced
-# unconditionally.  No tmux is launched — start it yourself if desired (`tm`).
+# unconditionally.  No multiplexer is launched — start it yourself (`herdr`).
 #
 # _SSH_COLS / _SSH_ROWS: custom env vars that carry the Mac terminal dimensions
 # into the container.  zsh will NOT overwrite these (unlike $COLUMNS/$LINES,

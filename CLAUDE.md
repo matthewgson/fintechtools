@@ -65,6 +65,15 @@ shell; a plain reconnect does the same thing.
 ROOT (udocker's own `bin/`+`lib/`, and the nvim plugin store), and `.zshrc`'s
 `_nvim_heal` repairs the plugin store after the fact via `git checkout -f`.
 
+None of this is tied to a multiplexer; herdr replaced tmux as the main one
+(2026-10) without changing it. The repair runs at connect, before any shell, and
+herdr's panes are interactive zsh, so they load the `nvim()` wrapper. herdr's
+only `/tmp` files are its sockets, which `.zshrc` `touch`es. Its binary is in the
+ROOT, so the ROOT sweep covers it, and `_INTERP_DIRS` covers it through
+`usr/local/bin`. Its layout and logs are on `$HOME`. The one multiplexer hazard
+is a server outliving a ROOT **re-setup**: its panes then preload a deleted
+libfakechroot. `udocker_dev.sh` warns about it at connect, and never kills it.
+
 ### The repair un-patches what it restores
 
 `fintech-rootfs.tar` is the pristine image, so every binary in it still carries
@@ -122,6 +131,25 @@ readdir and no git process. Deliberately *not* added to `udocker_dev.sh`: that
 check runs on the host, whose RHEL7 git 1.8.3.1 refuses lazy's `blob:none`
 partial clones (`repositoryformatversion=1`) and would silently never fire.
 
+### A second look-alike: empty git refs
+
+`:Lazy sync` failing for a few plugins with `fetch | fatal: bad object
+refs/heads/main` is a **0-byte ref file**, not reaped objects. git reads it as
+the null oid (`git show-ref`: `bad ref ... (0000…)`). Hit 2026-10-14 in
+plenary.nvim, nvim-lspconfig and markdown-preview.nvim. The empty refs came from
+a bulk operation on 2026-08-03 18:41, the same minute that left other plugins'
+files untracked in 21 repos, and those three plugins had failed every sync since.
+`git fsck` misleads here: lazy's `blob:none` clones always show thousands of
+`missing blob`, so only `error: refs/...` lines mean anything. The reaper deletes
+files; it never truncates them.
+
+`_nvim_git_repair` in `udocker_dev.sh` fixes it on every connect. It needs no git,
+so unlike `.cloning` it can run on the host: one `find -empty` over the store's
+`.git` trees, ~15 ms, silent when clean. It deletes an empty ref, `.idx`, `.pack`
+or `.rev` file, since they hold nothing. If `HEAD` itself, or the ref `HEAD`
+points at, is empty, it removes the plugin dir, and lazy re-clones it at the
+lock-file commit.
+
 ## Conventions that bite
 
 * **Config sync is one-way.** `sync_configs.sh` rsyncs repo-owned files onto
@@ -153,6 +181,45 @@ partial clones (`repositoryformatversion=1`) and would silently never fire.
   `readelf -l <bin> | grep interpreter` to tell them apart — a container path
   means healthy, a bare `/lib64/...` means one of the latter two.
 
+  **herdr is why the Dockerfile builds one tool from source on purpose.** Its
+  release binary is static musl, and a multiplexer does nothing *but* spawn
+  dynamic children (pane `$SHELL`, `/bin/sh -c`, plugin `bash`), so every pane
+  would die. The `herdrbuild` stage cross-compiles a dynamic
+  `x86_64-unknown-linux-gnu` build instead. Never swap in the release asset or run
+  `herdr update` there (`.zshrc` refuses it). Never let the Mac's `herdr --remote`
+  install onto CIRCE either: it puts the static release on the host.
+
+  **Quarto's bundled pandoc and typst are swapped for dynamic builds for the
+  same reason, a fourth variant with no relocation error.** A static binary that
+  only *reads* files still sees the HOST tree, and the dynamic deno hands both of
+  them `/opt/quarto/share/...` (Lua filters, templates, typst fonts and
+  packages), which do not exist on the host. Symptom: `Error running Lua:
+  cannot open /opt/quarto/share/filters/qmd-reader.lua: No such file or
+  directory` on every render. Reproduced on mdc-1057-13-13 on 2026-10-14, and
+  fixed there by swapping the binaries into the live ROOT, where typst and
+  beamer PDFs both render. Paths bound 1:1 (`$HOME`, `/work`,
+  `/tmp`) look the same from both sides, so esbuild (static Go, which reads only
+  the project and `/tmp`) is left as shipped. Stage -1c takes pandoc from
+  `pandoc/core:<v>-ubuntu` (built on 24.04, dynamic) and cross-compiles typst.
+  Stage 5c swaps both in and fails the build if either version differs from
+  what that Quarto release ships. `build_container.sh` reads the versions from
+  quarto-cli's `configuration` file. Do not point `QUARTO_PANDOC` at apt's
+  pandoc, because 3.1.3 is too old. Do not switch to udocker P1 (proot) either:
+  it brings back the ptrace overhead F3 was adopted to avoid.
+
+* **Keep the image lean: bake only what can't be installed at runtime.** Runtime
+  installs go to `$HOME`, which is persistent and shared by every node. That
+  works for pure-Python wheels (uv venvs) and for R packages that ship only
+  `.so` files. It does **not** work for executables: F3 patches `PT_INTERP`
+  only inside the ROOT, at setup, so a binary installed into `$HOME` keeps the
+  stock loader and fails with `GLIBC_PRIVATE`. That covers dynamic CLI tools,
+  npm natives, and R packages with `bin/`. So the image holds the apt libraries,
+  every CLI tool, and R `languageserver`, whose processx dependency ships
+  `px`/`supervisor`. On 2026-10-12 replstudio's Python venv and `ragg` moved to
+  runtime, along with tmux-continuum, the HDF5/protobuf/ODBC dev libraries,
+  and the full JDK. The JRE stays because H2O needs it.
+  Known gap: the user R library (`~/R/.../4.6`) has its own processx, and its
+  `px`/`supervisor` carry the stock interpreter.
 * **glibc reads locale data from the HOST, not the ROOT.** `setlocale()` opens
   its files via glibc-internal calls libfakechroot can't hook (the same wall as
   `resolv.conf`), so without help every process runs in the C locale.
@@ -170,7 +237,7 @@ partial clones (`repositoryformatversion=1`) and would silently never fire.
 * **The bookokrat helpers are ONE file each, shared by Mac and container.**
   `bookokrat-{split,forward,inverse}`, `tmux-kitty-image-gc` and
   `tmux-resurrect-age` all run on both sides, and `sync_configs.sh` prefers the LIVE `~/.local/bin/` copy over the
-  repo-root snapshot. So an edit made live must be copied back here, **and an
+  repo's `local-bin/` snapshot. So an edit made live must be copied back here, **and an
   edit made only here is thrown away by the next sync** — write both. Platform
   differences go inside the file (`uname -s`), not in two copies of it: that is
   how `bookokrat-split` picks `/opt/homebrew/bin/bookokrat` on the Mac and
@@ -200,8 +267,23 @@ partial clones (`repositoryformatversion=1`) and would silently never fire.
   `client-session-changed` hooks call it, and `bookokrat-split` appends it to
   the reader's own command line for the exit case. It deletes only Kitty z-index
   -1 and image id 1 — where bookokrat draws and where yazi does not — so a
-  preview in the neighbouring pane survives. Repaint costs ~1-1.5s here against
-  ~100-300ms on the Mac; that is the remote page floor, not a fault.
+  preview in the neighbouring pane survives. Repaint cost ~1-1.5s here with
+  upstream bookokrat, against ~100-300ms on the Mac. That was the ~18 MB raw page
+  crossing SSH, which the fork below fixes.
+* **bookokrat comes from the user's fork, `matthewgson/bookokrat`** (Dockerfile
+  Stage 5f and the `TOOL_VERSIONS` row in `build_container.sh`). Never point it
+  back at `bugzmanov`. Upstream sends PDF pages uncompressed when the terminal
+  can't read its shared memory (always, over SSH): ~18 MB and ~2 s per page
+  turn. The fork compresses them to ~0.5 MB and ~0.2-0.4 s. A new upstream
+  version reaches the image only after the fork's `main` is rebased onto it and
+  tagged `vX.Y.Z-fork.N`, which lets its release workflow publish the tarball.
+  A tag alone is not a release: GitHub runs no workflows on a fork until
+  "enable them" is clicked in its Actions tab (UI only; `gh workflow enable`
+  does not lift it), and a tag pushed while they are off is never replayed —
+  delete and re-push it. `build_container.sh` stops before `podman build` if
+  the fork has no release or the release lacks the linux-gnu tarball.
+  Source: `03_Programming/10_Bookokrat_fork`. The Mac stays on Homebrew's
+  upstream build, since locally the patch never applies.
 * **No AI plugins in nvim — avante.nvim and Copilot were removed 2026-10-01**
   because they kept failing to build. They are gone from both sides at once:
   the Mac's `lazyvim.json` (canonical in `02_dotfiles`) dropped the `ai.avante`

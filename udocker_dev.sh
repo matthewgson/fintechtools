@@ -151,6 +151,25 @@ if _need_setup; then
     _root="$(udocker inspect -p "$UDOCKER_CONTAINER" 2>/dev/null || true)"
 fi
 
+# ── a multiplexer server still running on a ROOT that setup replaced ─────────
+# Re-setup (a new tar from build_container.sh, or a ROOT the reaper gutted past
+# the checks above) deletes the old ROOT under any herdr/tmux server started
+# from it. The server keeps running, but every pane it spawns preloads a
+# libfakechroot that is gone and lands on the host — and `herdr` / `tm` would
+# reattach straight to it. Its binary then shows as "(deleted)" in /proc.
+# Warn, never kill: its panes may hold work in flight. Stopping a herdr server
+# costs little — it saves the layout to ~/.config/herdr/session.json on $HOME
+# (out of the reaper's and the re-setup's reach) and restores it, Claude
+# conversations included, when the next server starts. One pgrep per connect.
+for _p in $(pgrep -u "$USER" -x 'herdr|tmux: server' 2>/dev/null); do
+    case "$(readlink "/proc/$_p/exe" 2>/dev/null)" in
+        "$UDOCKER_DIR"/*' (deleted)')
+            err "a herdr/tmux server from the replaced image is still running (pid $_p); its new panes will fail."
+            err "  stop it before reattaching: herdr server stop (layout restores on the next herdr), tmux kill-server, or kill $_p"
+            break ;;
+    esac
+done
+
 # ── keep the /tmp reaper off the setup-only files ────────────────────────────
 # /tmp is mounted relatime and CIRCE prunes it by ATIME: files the runtime opens
 # on every launch stay fresh and survive, files touched only during setup age out.
@@ -186,6 +205,43 @@ _nvim_store="$_NODE_SCRATCH/.local/share/nvim"
 # everything else would keep it fresh forever and neuter the detector.
 [ -d "$_nvim_store" ] && find "$_nvim_store" -type f ! -name '.reap-sentinel' \
     -exec touch -a {} + 2>/dev/null || true
+
+# ── zero-byte git metadata in the plugin store ───────────────────────────────
+# Not the reaper: the reaper deletes, it never truncates. A 0-byte ref is never
+# valid. git reads it as the null oid, and lazy.nvim's fetch then dies for that
+# whole plugin ("fetch | fatal: bad object refs/heads/main"), on every :Lazy
+# sync. Found 2026-10-14 in plenary.nvim, nvim-lspconfig and
+# markdown-preview.nvim: stray empty refs/heads/main files written by some bulk
+# operation on 2026-08-03 18:41 (the same minute left other plugins' files
+# untracked in 21 repos), failing silently for two months.
+#
+# Pure filesystem, no git (the host's 1.8.3 can't read lazy's repos): one find
+# over the ~45 small .git trees, ~10 ms, silent unless it repairs something.
+#   * empty ref, or empty pack .idx/.pack/.rev: deleted. It holds nothing, so
+#     nothing is lost (packs: same reasoning as _nvim_heal in .zshrc). Never
+#     .promisor/.keep, which are legitimately empty.
+#   * empty HEAD, or an empty ref that HEAD points at: the checkout has no
+#     commit left, so the plugin dir goes and lazy re-clones it at the
+#     lazy-lock.json commit on the next nvim start.
+_nvim_git_repair() {
+    local lazy="$_nvim_store/lazy" f g repo head
+    [ -d "$lazy" ] || return 0
+    while IFS= read -r f; do
+        g="${f%%/.git/*}/.git"; repo="${g%/.git}"
+        [ -d "$repo" ] || continue   # already removed earlier in this pass
+        head="$(cat "$g/HEAD" 2>/dev/null)"
+        if [ -z "$head" ] || [ "$f" = "$g/${head#ref: }" ]; then
+            err "nvim plugin ${repo##*/}: no commit left (empty ${f#"$g"/}); removed, lazy re-clones it on the next nvim start"
+            rm -rf -- "$repo"
+        else
+            err "nvim plugin ${repo##*/}: removed empty ${f#"$g"/} (it made :Lazy sync fail)"
+            rm -f -- "$f"
+        fi
+    done < <(find "$lazy"/*/.git -type f -empty \( -path '*/.git/HEAD' -o -path '*/.git/refs/*' \
+                 -o -path '*/objects/pack/*.idx' -o -path '*/objects/pack/*.pack' \
+                 -o -path '*/objects/pack/*.rev' \) 2>/dev/null)
+}
+_nvim_git_repair
 
 # ── ...and off everything else in the ROOT: repair, then prevent ─────────────
 # The two sweeps above cover the paths whose loss we have already been bitten
@@ -695,16 +751,23 @@ fi
 # NOTE: if some `claude` subcommand ever re-execs the binary by its own
 # process.execPath, that child gets the raw PT_INTERP again and this same error.
 # Nothing observed so far; the fallback would be the patchelf route above.
+#
+# Inside a herdr pane the wrapper also sets HERDR_AGENT=claude. herdr spots
+# agents by process name and argv[0], and through this wrapper both say
+# ld-linux-x86-64.so.2, so the pane would never show Claude's state. herdr reads
+# that hint from the foreground process's environment; outside herdr it is unset.
 _cl_exe="$_root/usr/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
 if [ -n "$_root" ] && [ -x "$_cl_exe" ] && [ -e "$_root/lib64/ld-linux-x86-64.so.2" ]; then
     _clwrap="$_root/usr/local/bin/claude"     # /usr/local/bin precedes /usr/bin
-    if [ ! -e "$_clwrap" ] || ! grep -q "$_cl_exe" "$_clwrap" 2>/dev/null; then
+    if [ ! -e "$_clwrap" ] || ! grep -q "$_cl_exe" "$_clwrap" 2>/dev/null \
+       || ! grep -q HERDR_AGENT "$_clwrap" 2>/dev/null; then
         mkdir -p "$_root/usr/local/bin" 2>/dev/null
         {
             echo '#!/bin/sh'
             echo '# Auto-generated by udocker_dev.sh — see the claude block there.'
             echo '# claude.exe keeps an unpatched PT_INTERP, so the HOST loader would'
             echo '# start it against the container glibc. Name the container loader.'
+            echo '[ -n "$HERDR_ENV" ] && export HERDR_AGENT=claude'
             echo "exec \"$_root/lib64/ld-linux-x86-64.so.2\" \"$_cl_exe\" \"\$@\""
         } > "$_clwrap.tmp.$$" 2>/dev/null \
             && chmod +x "$_clwrap.tmp.$$" 2>/dev/null \

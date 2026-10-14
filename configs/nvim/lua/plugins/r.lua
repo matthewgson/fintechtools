@@ -15,9 +15,10 @@
 -- r_language_server cmd is `R --no-echo --no-save -e languageserver::run()`,
 -- which loads that system copy. No per-user install, nothing to compile.
 --
--- `root_markers` is left to the lang.r extra (DESCRIPTION / NAMESPACE /
--- .Rbuildignore); LazyVim deep-merges these server opts, so we only add the
--- `mason = false` key without clobbering the rest.
+-- `root_markers` is left to replstudio.lua, which now registers the server in
+-- place of the lang.r extra (DESCRIPTION / NAMESPACE / .Rbuildignore); LazyVim
+-- deep-merges these server opts, so we only add the `mason = false` key
+-- without clobbering the rest.
 return {
   {
     "neovim/nvim-lspconfig",
