@@ -162,10 +162,6 @@ else
     echo "Found running job on node: $NODE"
 fi
 
-echo "Connecting to container on $NODE ..."
-echo "(Inside the container, attach to your layout: herdr)"
-echo ""
-
 # ─── Capture local terminal dimensions ───────────────────────────────────────
 # stty size reads TIOCGWINSZ directly from the PTY fd — more reliable than
 # `tput cols/lines`, which can return the value of the $COLUMNS env var set by
@@ -175,6 +171,91 @@ COLS="${_sz##* }" ROWS="${_sz%% *}"
 [[ -z "$COLS"  || "$COLS"  -le 0 ]] 2>/dev/null && COLS=$(tput cols  2>/dev/null || echo 220)
 [[ -z "$ROWS"  || "$ROWS"  -le 0 ]] 2>/dev/null && ROWS=$(tput lines 2>/dev/null || echo 50)
 unset _sz
+
+# ─── mac-open: HTML and URLs from the container open in the Mac's Safari ─────
+# `o` on an .html file in yazi or nvim (and `gx` on a URL) runs the container's
+# ~/.local/bin/mac-open, which needs two forwards on THIS connection, both Unix
+# sockets that sshd creates 0600, so other users on the node cannot use them:
+#   -R  node:/tmp/mac-open-<user>.<port>.<epoch>.<pid>.sock → the listener below,
+#       which runs `open -a Safari <url>`. Unique per connection because sshd
+#       will not bind over a socket file a dead connection left behind.
+#   -L  Mac:127.0.0.1:<port> → node:/tmp/<user>/mac-open/httpd.sock, the page
+#       server mac-open starts there, so Safari loads the file over HTTP and
+#       relative assets (Quarto's *_files/) resolve. Each connection takes the
+#       first free port, which is why the -R name carries it.
+# A failed forward only warns (no ExitOnForwardFailure): it must never cost the
+# connection itself. The node ssh below runs with ControlPath=none: ~/.ssh/config
+# gives mdc-* a ControlMaster with ControlPersist 72h, and forwards requested
+# through a multiplexed session stay in that master after the session ends, so
+# every reconnect would leave another port and socket behind for three days.
+# Its own connection drops them with it. That costs no login-node budget, since
+# the -J hop still rides the circe master. A fresh handshake with the node's
+# older sshd makes OpenSSH 10.1+ print a three-line "not using a post-quantum
+# key exchange" warning on every connect. Muxed reconnects never showed it.
+# This inner hop travels inside the circe connection, which keeps its own
+# warning, so it is silenced here, only where ssh knows the option.
+#
+# The listener is shared by every connection and outlives them; a second copy
+# sees the lock and exits. Bump the -N in its socket name when its code
+# changes, so the next connect starts the new one. MO_STATUS is the line the
+# connect banner prints, so a session without the bridge says so up front.
+SSH_NODE_OPTS=(-o ControlPath=none)
+ssh -G -o WarnWeakCrypto=no localhost >/dev/null 2>&1 && SSH_NODE_OPTS+=(-o WarnWeakCrypto=no)
+MO_SOCK="$HOME/.local/state/mac-open/listener-1.sock"   # AF_UNIX caps paths at 104 bytes
+MO_ARGS=()
+MO_STATUS="mac-open is OFF: no python3 on this Mac to run its listener."
+if command -v python3 >/dev/null 2>&1; then
+    MO_STATUS="mac-open is OFF: Mac ports 18374-18393 are all in use."
+    read -r -d '' MO_LISTENER <<'PY'
+import fcntl, os, re, socket, subprocess, sys
+path = sys.argv[1]
+os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+lock = open(path + ".lock", "w")
+try:
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    sys.exit(0)                                  # one is already listening
+try:
+    os.unlink(path)
+except FileNotFoundError:
+    pass
+os.umask(0o077)
+srv = socket.socket(socket.AF_UNIX)
+srv.bind(path)
+srv.listen(8)
+url = re.compile(r"https?://[!-~]{1,8000}\Z", re.I)
+while True:
+    conn, _ = srv.accept()
+    with conn:
+        conn.settimeout(5)
+        try:
+            line = conn.makefile("rb").readline(8192).decode("utf-8", "replace").strip()
+            if not url.match(line):                # never file:, javascript:, app schemes
+                reply = "only http(s) URLs are opened"
+            else:
+                r = subprocess.run(["open", "-a", "Safari", line], capture_output=True, text=True)
+                reply = "ok" if r.returncode == 0 else (r.stderr.strip() or "open failed")
+            conn.sendall((reply + "\n").encode())
+        except OSError:
+            pass
+PY
+    nohup python3 -c "$MO_LISTENER" "$MO_SOCK" </dev/null >/dev/null 2>&1 &
+    for _p in $(seq 18374 18393); do
+        nc -z 127.0.0.1 "$_p" 2>/dev/null && continue
+        MO_ARGS=(
+            -L "127.0.0.1:$_p:/tmp/$REMOTE_USER/mac-open/httpd.sock"
+            -R "/tmp/mac-open-$REMOTE_USER.$_p.$(date +%s).$$.sock:$MO_SOCK"
+        )
+        MO_STATUS="mac-open is on: .html files and URLs open in this Mac's Safari (port $_p)."
+        break
+    done
+    unset _p
+fi
+
+echo "Connecting to container on $NODE ..."
+echo "(Inside the container, attach to your layout: herdr)"
+echo "$MO_STATUS"
+echo ""
 
 # ─── SSH to compute node and launch the container via udocker ────────────────
 # Uses the compute node's native SSH (no container sshd needed).
@@ -190,7 +271,7 @@ unset _sz
 #
 # PDF viewing needs no X11 and no Mac-side helper: VimTeX/yazi open PDFs in
 # bookokrat, which draws in-terminal via the kitty graphics protocol over plain
-# SSH (no XQuartz, no -Y forwarding, no mac-open reverse tunnel).
+# SSH (no XQuartz, no -Y forwarding). The only forwards are mac-open's, above.
 
 # Singularity/Apptainer can't start containers on compute nodes post-2026, so we
 # launch via ~/bin/$LAUNCHER instead (userspace udocker, Fakechroot/F3). It
@@ -203,6 +284,8 @@ unset _sz
 # that stage simply keep xterm-256color. The `infocmp` probe runs in the container.
 ssh \
     -J "$LOGIN_ALIAS" \
+    "${SSH_NODE_OPTS[@]}" \
+    "${MO_ARGS[@]}" \
     -tt \
     "$REMOTE_USER@$NODE" \
     "TERM=xterm-256color COLUMNS=$COLS LINES=$ROWS _SSH_COLS=$COLS _SSH_ROWS=$ROWS \

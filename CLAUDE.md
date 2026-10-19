@@ -284,6 +284,42 @@ lock-file commit.
   the fork has no release or the release lacks the linux-gnu tarball.
   Source: `03_Programming/10_Bookokrat_fork`. The Mac stays on Homebrew's
   upstream build, since locally the patch never applies.
+* **HTML files and URLs open in the Mac's Safari through `mac-open`**
+  (`local-bin/mac-open`, container-only, synced to `~/.local/bin`). yazi's `o`
+  on `.html`/`.htm`, and nvim's `vim.ui.open` (the snacks explorer's `o`,
+  `gx`), call it. It depends on two forwards that `connect_nvim.sh` adds to
+  every connection, so a session opened any other way has no tunnel and
+  `mac-open` says so. Both forwards are Unix sockets, which sshd creates 0600,
+  so another user on a shared node can neither open pages on the Mac nor read
+  files:
+  * The `-R` forward, at `/tmp/mac-open-<user>.<port>.<epoch>.<pid>.sock`, is
+    how a request reaches the Mac listener embedded in `connect_nvim.sh`. That
+    listener only runs `open -a Safari` for http(s) URLs.
+  * The `-L` forward, from `127.0.0.1:<port>` on the Mac, is how Safari reaches
+    `mac-open --serve` on the node.
+
+  The page is **served, not copied**, so Quarto's `*_files/` assets resolve and
+  a Safari reload shows a re-render. Every URL carries a per-server token, and
+  the server answers only `Host: 127.0.0.1` or `localhost`.
+
+  Four things bite here (verified on mdc-1057-13-13, 2026-10-17):
+  * The node ssh runs with `ControlPath=none`. `~/.ssh/config` gives `mdc-*` a
+    ControlMaster that persists for 72h, and forwards requested through a
+    multiplexed session stay in that master after the session ends, a new
+    pair on every reconnect. Because the connection is fresh, the node's
+    non-post-quantum key exchange warning appears, so `WarnWeakCrypto=no` is
+    added where ssh supports it. The `-J` hop still rides the circe master,
+    so this costs no login-node budget.
+  * sshd won't bind over a stale socket file and never unlinks the ones it made,
+    hence the unique `-R` names. `mac-open` deletes refused ones.
+  * macOS caps `AF_UNIX` paths at 104 bytes, so the Mac socket lives at
+    `~/.local/state/mac-open/listener-N.sock`. Bump N when the listener code
+    changes, and the next connect starts the new listener.
+  * Each connection takes the first free Mac port from 18374 and encodes it in
+    its `-R` name, so concurrent connections never collide.
+
+  The old June bridge (TCP 8765, copied file bytes) is not coming back: any user
+  on the node could use its port.
 * **No AI plugins in nvim — avante.nvim and Copilot were removed 2026-10-01**
   because they kept failing to build. They are gone from both sides at once:
   the Mac's `lazyvim.json` (canonical in `02_dotfiles`) dropped the `ai.avante`

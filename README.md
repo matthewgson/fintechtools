@@ -148,6 +148,34 @@ inner or an outer session switch — the leftover-page bug needs a single
 multiplexer, i.e. the ordinary bare-ghostty `connect_nvim.sh` case. Measured end
 to end with a real PDF, 2026-09-07.
 
+## HTML in Safari — mac-open
+
+`o` on an `.html` file in yazi or the nvim explorer, and `gx` on a URL in nvim,
+open it in **Safari on the Mac**, as they would locally. The container's
+`~/.local/bin/mac-open` does the work. You can also call it by hand:
+`mac-open report.html` or `mac-open https://…`.
+
+- **Only through `connect_nvim.sh`.** Each connection it makes carries two
+  extra SSH forwards, both private Unix sockets:
+  - one from the node to a small listener on the Mac, which runs
+    `open -a Safari`;
+  - one from a Mac port (18374 or the next free one) to a page server on the
+    node.
+
+  The connect banner reports it: `mac-open is on: … (port 18374)`, or
+  `mac-open is OFF:` and the reason. A session opened any other way has
+  neither forward, and `mac-open` says so. Reconnecting through
+  `connect_nvim.sh` fixes it, and your herdr layout survives the reconnect.
+  An nvim or yazi already running in a herdr pane keeps its old config until
+  you restart it.
+- **Served, not copied.** Safari reads the page over HTTP from the node, so a
+  Quarto or R Markdown page finds its `*_files/` folder, and **reload** shows a
+  fresh render. The URL contains a random token, and the server answers only
+  requests addressed to `127.0.0.1` or `localhost`.
+- **HTML and http(s) URLs only.** PDFs still go to bookokrat. A
+  `http://localhost:…` URL printed on the node (`quarto preview`) points at
+  the node, not the Mac, so it will not load in Safari.
+
 ## herdr
 
 [herdr](https://herdr.dev) is the container's multiplexer, and the startup

@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""mac-open — open an HTML file or an http(s) URL in Safari on the Mac.
+
+Container-only (sync_configs.sh puts it in CIRCE's ~/.local/bin). yazi's and
+nvim's `o` call it for .html files, and nvim's vim.ui.open (`gx`) for URLs.
+
+    mac-open report.html
+    mac-open https://example.com
+
+connect_nvim.sh gives every connection two forwards, both Unix sockets that
+only you can open (sshd creates them 0600):
+
+  -R /tmp/mac-open-<user>.<port>.<epoch>.<pid>.sock
+       → the Mac's listener, which runs `open -a Safari <url>`. That is how a
+         request reaches the Mac. The name carries the Mac port of the -L below
+         because each connection picks its own free one.
+  -L 127.0.0.1:<port> on the Mac
+       → /tmp/<user>/mac-open/httpd.sock on the node, where `mac-open --serve`
+         answers. That is how Safari reads the page.
+
+A file is SERVED, not copied: a Quarto or R Markdown page finds its `*_files/`
+assets by relative path, and a reload in Safari shows a re-render. The server
+starts on first use and lives until the job ends. URLs carry a per-server token
+and the server answers only Host 127.0.0.1/localhost, so neither another Mac
+process guessing paths nor a DNS-rebinding web page can read files through it.
+
+Several connections can be open at once (several terminals, or a dead one whose
+socket file sshd left behind). The newest that answers wins, and a refused one
+is deleted.
+"""
+
+import fcntl
+import glob
+import os
+import re
+import secrets
+import socket
+import subprocess
+import sys
+import time
+import urllib.parse
+
+USER = os.environ.get("USER") or os.environ.get("LOGNAME") or str(os.getuid())
+STATE = f"/tmp/{USER}/mac-open"
+HTTPD_SOCK = f"{STATE}/httpd.sock"
+TOKEN_FILE = f"{STATE}/token"
+TUNNEL_RE = re.compile(rf"/tmp/mac-open-{re.escape(USER)}\.(\d+)\.(\d+)\.\d+\.sock\Z")
+URL_RE = re.compile(r"https?://[!-~]+\Z", re.I)  # printable ASCII, no spaces
+HTML_EXT = (".html", ".htm", ".xhtml")
+
+
+def die(msg):
+    print(f"mac-open: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def connectable(path):
+    s = socket.socket(socket.AF_UNIX)
+    s.settimeout(2)
+    try:
+        s.connect(path)
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
+# ── the page server (`mac-open --serve`) ─────────────────────────────────────
+def serve():
+    import http.server
+    import socketserver
+
+    os.makedirs(STATE, mode=0o700, exist_ok=True)
+    lock = open(f"{STATE}/lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return  # another server owns the socket
+    token = secrets.token_urlsafe(16)
+    prefix = "/" + token
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory="/", **kw)
+
+        def address_string(self):  # a Unix socket has no peer address
+            return "mac"
+
+        def log_message(self, *a):
+            pass
+
+        def send_header(self, key, value):
+            # The directory redirect (dir → dir/) is built from the stripped path.
+            if key.lower() == "location" and value.startswith("/"):
+                value = prefix + value
+            super().send_header(key, value)
+
+        def end_headers(self):
+            self.send_header("Cache-Control", "no-cache")  # reload = re-render
+            super().end_headers()
+
+        def gate(self):
+            host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
+            if host not in ("127.0.0.1", "localhost"):
+                self.send_error(403)
+                return False
+            if self.path != prefix and not self.path.startswith(prefix + "/"):
+                self.send_error(404)
+                return False
+            self.path = self.path[len(prefix):] or "/"
+            return True
+
+        def do_GET(self):
+            if self.gate():
+                super().do_GET()
+
+        def do_HEAD(self):
+            if self.gate():
+                super().do_HEAD()
+
+    class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+        daemon_threads = True
+
+    try:
+        os.unlink(HTTPD_SOCK)
+    except FileNotFoundError:
+        pass
+    os.umask(0o077)
+    srv = Server(HTTPD_SOCK, Handler)
+    tmp = f"{TOKEN_FILE}.{os.getpid()}"
+    with open(tmp, "w") as f:
+        f.write(token + "\n")
+    os.replace(tmp, TOKEN_FILE)
+    srv.serve_forever()
+
+
+def ensure_httpd():
+    def ready():
+        try:
+            with open(TOKEN_FILE) as f:
+                tok = f.read().strip()
+        except OSError:
+            return None
+        return tok if tok and connectable(HTTPD_SOCK) else None
+
+    tok = ready()
+    if tok:
+        return tok
+    os.makedirs(STATE, mode=0o700, exist_ok=True)
+    with open(f"{STATE}/httpd.log", "ab") as log:
+        subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--serve"],
+            start_new_session=True,  # outlives the yazi/nvim/pane that started it
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log,
+        )
+    for _ in range(50):
+        time.sleep(0.1)
+        tok = ready()
+        if tok:
+            return tok
+    die(f"the page server did not start (see {STATE}/httpd.log)")
+
+
+# ── the request to the Mac ───────────────────────────────────────────────────
+def tunnels():
+    found = []
+    for path in glob.glob(f"/tmp/mac-open-{USER}.*.sock"):
+        m = TUNNEL_RE.match(path)
+        if m:
+            found.append((int(m.group(2)), int(m.group(1)), path))
+    return sorted(found, reverse=True)  # newest connection first
+
+
+def send(url_for_port):
+    silent = False
+    for _, port, path in tunnels():
+        s = socket.socket(socket.AF_UNIX)
+        s.settimeout(5)
+        try:
+            s.connect(path)
+        except (ConnectionRefusedError, FileNotFoundError):
+            # Its connection is gone; sshd does not unlink the socket it bound.
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            s.close()
+            continue
+        except OSError:
+            s.close()
+            continue
+        with s:
+            try:
+                s.sendall((url_for_port(port) + "\n").encode())
+                reply = s.makefile("rb").readline().decode(errors="replace").strip()
+            except OSError:
+                reply = ""
+        if reply == "ok":
+            return
+        if reply:
+            die(f"the Mac answered: {reply}")
+        silent = True  # sshd took it, but nothing answered on the Mac: try older ones
+    if silent:
+        die("the tunnel is up but the Mac's listener did not answer. "
+            "Reconnect with ./connect_nvim.sh, which starts it.")
+    die("no tunnel to the Mac. Connect with ./connect_nvim.sh, which sets one up "
+        "on every connection; a plain ssh session carries none.")
+
+
+def main(argv):
+    if argv[1:] == ["--serve"]:
+        serve()
+        return 0
+    if len(argv) < 2 or argv[1] in ("-h", "--help"):
+        print("usage: mac-open <file.html | http(s)://url> ...", file=sys.stderr)
+        return 2
+    for target in argv[1:]:
+        if URL_RE.match(target):
+            send(lambda port, url=target: url)
+            continue
+        path = os.path.realpath(target)
+        if not os.path.isfile(path):
+            die(f"not a file: {target}")
+        if not path.lower().endswith(HTML_EXT):
+            die(f"only HTML files and http(s) URLs open on the Mac: {target}")
+        token = ensure_httpd()
+        send(lambda port, p=path: f"http://127.0.0.1:{port}/{token}{urllib.parse.quote(p)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

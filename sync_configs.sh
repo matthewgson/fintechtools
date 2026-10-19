@@ -77,6 +77,7 @@ HAVE_UDOCKER=0;  [ -f "${SCRIPT_DIR}/udocker_dev.sh" ]      && HAVE_UDOCKER=1
 HAVE_CLAUDEMD=0; [ -f "${SCRIPT_DIR}/configs/claude/CLAUDE.md" ] && HAVE_CLAUDEMD=1
 HAVE_CONNECT=0;  [ -f "${SCRIPT_DIR}/connect_nvim.sh" ]     && HAVE_CONNECT=1
 HAVE_HERDR=0;    [ -f "$HOME/.config/herdr/config.toml" ]   && HAVE_HERDR=1
+HAVE_MACOPEN=0;  [ -f "${SCRIPT_DIR}/local-bin/mac-open" ]   && HAVE_MACOPEN=1
 # bookokrat helper scripts. Source the LIVE Mac copies (where they're edited and
 # used) so changes sync without a manual repo update; fall back to the repo's
 # local-bin/ snapshot. Each row is  LIVE-PATH-UNDER-~ | REPO-SNAPSHOT | DEST-UNDER-~ .
@@ -126,6 +127,7 @@ echo "  • ~/.config/{$(IFS=,; echo "${CONFIG_LIST[*]}")} → CIRCE"
 [ "$HAVE_CLAUDEMD" -eq 1 ] && echo "  • configs/claude/CLAUDE.md → CIRCE ~/.claude/CLAUDE.md  (container notes for Claude)"
 [ "$HAVE_BOOKOKRAT_SCRIPTS" -eq 1 ] && echo "  • bookokrat helpers → CIRCE ~/.local/bin/  (${#BOOKOKRAT_FILES[@]} files)"
 [ "$HAVE_HERDR"    -eq 1 ] && echo "  • ~/.config/herdr settings + plugins → CIRCE  (no sockets, logs or sessions)"
+[ "$HAVE_MACOPEN"  -eq 1 ] && echo "  • local-bin/mac-open → CIRCE ~/.local/bin/  (HTML/URLs → the Mac's Safari)"
 [ "$HAVE_CONNECT"  -eq 1 ] && echo "  • connect_nvim.sh → ~/  (local)"
 echo
 
@@ -324,6 +326,16 @@ if [ "$HAVE_BOOKOKRAT_SCRIPTS" -eq 1 ]; then
     chmod +x "$STAGING/${_dest}"
     _staged+=("${_dest}")
   done
+fi
+
+# mac-open runs only in the container, so unlike the helpers above there is no
+# live Mac copy to prefer: the repo's is the only one. connect_nvim.sh holds
+# the Mac half (the listener and the two forwards).
+if [ "$HAVE_MACOPEN" -eq 1 ]; then
+  mkdir -p "$STAGING/.local/bin"
+  cp "${SCRIPT_DIR}/local-bin/mac-open" "$STAGING/.local/bin/mac-open"
+  chmod +x "$STAGING/.local/bin/mac-open"
+  _staged+=(".local/bin/mac-open")
 fi
 
 # Pre-create remote dirs

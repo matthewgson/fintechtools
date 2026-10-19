@@ -65,6 +65,14 @@ paths; only the repair half is table-limited.
 * **`.venv` here is not a real venv** — `.venv/bin/python3` symlinks to
   `/usr/bin/python3`, so it inherits the system stdlib and offers no fallback
   when that stdlib is damaged. Only `site-packages` is local.
+* **HTML files and URLs open in the Mac's Safari: `mac-open <file.html|url>`.**
+  yazi's `o` and nvim's `vim.ui.open` already use it. It needs the two SSH
+  forwards that `connect_nvim.sh` adds. "no tunnel to the Mac" means this
+  session came in some other way, and reconnecting through `connect_nvim.sh`
+  fixes it. The page is served from this node, not copied, so relative assets
+  load. Only `.html`/`.htm`/`.xhtml` files and http(s) URLs are accepted.
+  A `localhost` URL printed here (e.g. by `quarto preview`) means the node's
+  localhost, not the Mac's, so do not hand one to mac-open.
 * **PDFs open in bookokrat, in a half split beside the caller.** yazi's `o` on a
   `*.pdf`/`*.epub`, snacks-explorer's `o`, `gx`/`vim.ui.open` and VimTeX's
   `<localleader>lv` all end up in `~/.local/bin/bookokrat-split`, which splits the

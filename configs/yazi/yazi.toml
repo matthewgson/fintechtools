@@ -25,12 +25,23 @@ bookokrat = [
   # classic placement at z=-1, and tmux-kitty-image-gc only ever deletes z=-1.
   { run = 'bookokrat-split %s', desc = "bookokrat (half split)", orphan = true },
 ]
+mac = [
+  # Safari on the Mac, through the tunnels connect_nvim.sh sets up: mac-open
+  # serves the page from this node, so its relative assets (Quarto's *_files/)
+  # load, and a reload in Safari shows a re-render. Not orphan, so a failure
+  # (say, a connection made without connect_nvim.sh) stays readable in the task
+  # list (`w`) instead of going to /dev/null.
+  { run = 'mac-open %s', desc = "Safari (on the Mac)" },
+]
 
 [open]
 # No `open`/`reveal` fallbacks in the list the way the Mac has them: those are
-# macOS `open(1)`, which does not exist in the container. bookokrat is the only
+# macOS `open(1)`, which does not exist in the container. HTML is the one type
+# that still reaches the Mac, through mac-open. bookokrat is the only
 # PDF/EPUB viewer on this side — there is no X11 and no display to send one to.
 prepend_rules = [
   { url = "*.pdf",  use = "bookokrat" },
   { url = "*.epub", use = "bookokrat" },
+  { url = "*.html", use = "mac" },
+  { url = "*.htm",  use = "mac" },
 ]
