@@ -74,6 +74,18 @@ ROOT, so the ROOT sweep covers it, and `_INTERP_DIRS` covers it through
 is a server outliving a ROOT **re-setup**: its panes then preload a deleted
 libfakechroot. `udocker_dev.sh` warns about it at connect, and never kills it.
 
+A newly shipped tar no longer triggers that re-setup by itself (2026-11-04):
+`_container_ready` keeps the current container while any of the user's
+processes on the node runs from its ROOT (`_root_users`: one pgrep plus
+`/proc/PID/exe`, only while a newer tar waits), and the connect says what is
+holding it. The switch happens on the first connect after the jobs end and
+`herdr server stop`. Before this, shipping a tar while herdr ran jobs meant the
+next connect (connect_nvim.sh always goes to the same node) deleted the ROOT
+under them. While a tar waits, the fzf/zoxide/static-git copies are not
+refreshed (they would be stamped newer than the tar and never take the new
+image's), and `_reap_repair` does not restore from the tar (it would mix two
+images in one ROOT).
+
 `.zshrc` sets `HERDR_SOCKET_PATH` (the `/tmp` socket) only when herdr has not:
 until 2026-11-04 it overwrote the value herdr gives its panes, so inside a
 second session (`herdr --session NAME`, e.g. a test's throwaway one) every

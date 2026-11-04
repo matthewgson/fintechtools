@@ -86,6 +86,27 @@ mkdir -p "$UDOCKER_DIR" || exit 1
 # and reuse it below; the warm path pays exactly one inspect, as it always did.
 _root="$(udocker inspect -p "$UDOCKER_CONTAINER" 2>/dev/null || true)"
 
+# ── a new image waits while this one is in use ───────────────────────────────
+# Re-setup deletes the ROOT, and everything still running from it then loses
+# every file it has not opened yet: herdr's next pane, a job's next library()
+# or import, its next subprocess. So a newer tar is set up only once none of
+# our processes on this node runs from the current ROOT (jobs done, `herdr
+# server stop`); until then a connect keeps the current container and says
+# so. Found 2026-11-04: a tar shipped while herdr ran jobs, and the next
+# connect (same node) would have pulled the ROOT out from under them. Prints
+# "PID PATH-IN-ROOT" per process; costs one pgrep, and only while a newer tar
+# waits.
+_holders=""
+_root_users() {
+    [ -n "$_root" ] && [ -d "$_root" ] || return 0
+    local real p exe
+    real="$(cd -P "$_root" 2>/dev/null && pwd)" || return 0
+    for p in $(pgrep -u "$USER" 2>/dev/null); do
+        exe="$(readlink "/proc/$p/exe" 2>/dev/null)" || continue
+        case "$exe" in "$real"/*) echo "$p ${exe#"$real"}" ;; esac
+    done
+}
+
 _container_ready() {
     [ -n "$_root" ] && [ -d "$_root" ] || return 1
     local cdir="${_root%/ROOT}"
@@ -102,7 +123,10 @@ _container_ready() {
     # container.json is written by `udocker create`, so it dates the container.
     # This is the auto-update path after build_container.sh ships a new tar.
     # Compares MTIMEs, which is why the reaper defence below uses `touch -a`.
-    ! [ "$FINTECH_TAR" -nt "$cdir/container.json" ]
+    [ "$FINTECH_TAR" -nt "$cdir/container.json" ] || return 0
+    # ... but not while anything runs from it (see _root_users above).
+    _holders="$(_root_users)"
+    [ -n "$_holders" ]
 }
 _need_setup() { ! _container_ready; }
 
@@ -150,6 +174,19 @@ if _need_setup; then
     # The container was recreated under a new id — re-resolve the ROOT.
     _root="$(udocker inspect -p "$UDOCKER_CONTAINER" 2>/dev/null || true)"
 fi
+
+if [ -n "$_holders" ]; then
+    err "a new image is waiting (tar of $(date -r "$FINTECH_TAR" '+%F %R')); this node keeps the current one"
+    err "  while $(printf '%s\n' "$_holders" | wc -l | tr -d ' ') of your processes run from it ($(printf '%s\n' "$_holders" \
+        | awk '{ sub(/ \(deleted\)$/, ""); n = split($2, a, "/"); print a[n] }' | sort | uniq -c | sort -rn \
+        | awk 'NR <= 4 { printf "%s%s x%s", s, $2, $1; s = ", " }'))."
+    err "  To switch: let the jobs finish, run \`herdr server stop\` (the layout comes back), then reconnect."
+fi
+
+# The tar's mtime dates the image the ROOT came from, except while a newer one
+# waits (above): a copy taken from this ROOT then would be stamped newer than
+# the tar, and the new image's version would never replace it.
+_tar_newer() { [ -z "$_holders" ] && [ "$FINTECH_TAR" -nt "$1" ]; }
 
 # ── a multiplexer server still running on a ROOT that setup replaced ─────────
 # Re-setup (a new tar from build_container.sh, or a ROOT the reaper gutted past
@@ -442,6 +479,12 @@ _reap_repair() {
         hit=1
     done
     [ "$hit" -eq 1 ] || return 0
+    if [ -n "$_holders" ]; then
+        # The tar now holds the newer image: restoring from it would mix two
+        # versions in one ROOT. Switching (above) restores everything.
+        err "/tmp reaper: not restoring: the tar holds a newer image than this container; switch to it (see above)"
+        return 1
+    fi
     if [ ! -f "$FINTECH_TAR" ]; then
         err "/tmp reaper: rootfs tar missing at $FINTECH_TAR — cannot restore"
         return 1
@@ -519,7 +562,7 @@ if [ -n "$_root" ]; then
         _src="$_root/usr/local/bin/$_t"
         [ -e "$_src" ] || continue
         if [ ! -e "$_bindbin/$_t" ] || [ "$_src" -nt "$_bindbin/$_t" ] \
-           || [ "$FINTECH_TAR" -nt "$_bindbin/$_t" ]; then
+           || _tar_newer "$_bindbin/$_t"; then
             cp -fL "$_src" "$_bindbin/$_t.tmp.$$" 2>/dev/null \
                 && chmod +x "$_bindbin/$_t.tmp.$$" 2>/dev/null \
                 && mv -f "$_bindbin/$_t.tmp.$$" "$_bindbin/$_t" 2>/dev/null
@@ -555,7 +598,7 @@ fi
 # (Proven 2026-06-29: dynamic git auths fine; static git breaks every child.)
 if [ -n "$_root" ] && [ -d "$_root/opt/git-static" ]; then
     _gitdst="$HOME/.local/git-static"
-    if [ ! -x "$_gitdst/bin/git" ] || [ "$FINTECH_TAR" -nt "$_gitdst/bin/git" ]; then
+    if [ ! -x "$_gitdst/bin/git" ] || _tar_newer "$_gitdst/bin/git"; then
         rm -rf "$_gitdst.tmp.$$" 2>/dev/null
         if cp -a "$_root/opt/git-static" "$_gitdst.tmp.$$" 2>/dev/null; then
             rm -rf "$_gitdst" 2>/dev/null
