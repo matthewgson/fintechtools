@@ -642,13 +642,21 @@ RUN BOTTOM_VERSION=${BOTTOM_VERSION} && \
 # under the QEMU emulation this amd64 image is built in on the arm64 Mac
 # ("qemu: uncaught target signal 11", exit 139 — failed the 2026-10-14 build).
 # `file` checks it is an x86-64 ELF without executing it.
+# The asset changed name and format at v2.0.0 (2026-10-21): 1.x ships
+# duckdb_cli-linux-amd64.zip, 2.x duckdb-cli-linux-amd64.tar.gz (the binary at
+# its top level in both). The 2026-11-04 build 404'd on the old name; take the
+# tarball and fall back to the zip, so pinning a 1.x release still works.
 RUN DUCKDB_VERSION=${DUCKDB_VERSION} && \
   echo "Installing duckdb ${DUCKDB_VERSION}" && \
-  curl -fL "https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}/duckdb_cli-linux-amd64.zip" \
-  -o /tmp/duckdb.zip && \
-  unzip -o -d /usr/local/bin /tmp/duckdb.zip duckdb && \
+  base="https://github.com/duckdb/duckdb/releases/download/${DUCKDB_VERSION}" && \
+  if curl -fsSL "${base}/duckdb-cli-linux-amd64.tar.gz" -o /tmp/duckdb.tar.gz; then \
+    tar -C /usr/local/bin -xzf /tmp/duckdb.tar.gz duckdb; \
+  else \
+    curl -fL "${base}/duckdb_cli-linux-amd64.zip" -o /tmp/duckdb.zip && \
+    unzip -o -d /usr/local/bin /tmp/duckdb.zip duckdb; \
+  fi && \
   chmod +x /usr/local/bin/duckdb && \
-  rm /tmp/duckdb.zip && \
+  rm -f /tmp/duckdb.tar.gz /tmp/duckdb.zip && \
   file /usr/local/bin/duckdb | grep -q 'ELF 64-bit LSB.*x86-64'
 
 # ─── Stage 8f: catppuccin/tmux theme (status bar) ───────────────────────────
