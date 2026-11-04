@@ -1,9 +1,9 @@
 # configs/yazi/yazi.toml — synced to CIRCE ~/.config/yazi/ by sync_configs.sh.
 #
-# PDFs/EPUBs open in bookokrat (terminal reader) in a half split beside yazi,
-# via the bookokrat-split wrapper in ~/.local/bin (same file the Mac runs; see
-# its header for the tmux-rediscovery and reuse logic). Images preview
-# in-terminal via yazi's built-in graphics; other types use yazi's defaults.
+# PDFs open in farleaf (terminal reader) in a half herdr split beside yazi, via
+# the farleaf-split helper in ~/.local/bin (same file the Mac runs; see its
+# header for the reuse logic). Images preview in-terminal via yazi's built-in
+# graphics; other types use yazi's defaults.
 
 [opener]
 # Use %s, never the shell positional form: yazi deprecated $n and $@ in
@@ -11,19 +11,15 @@
 # (The container ships yazi 26.5.6, so they ARE gone here.) The opener still
 # RUNS, it just receives an empty argument. Combined with `orphan = true`, which
 # sends the child's stdout and stderr to /dev/null, that fails in total silence
-# — pressing `o` spawns bookokrat-split with no file, its ${1:?} usage guard
+# — pressing `o` spawns farleaf-split with no file, its ${1:?} usage guard
 # aborts, and nothing whatsoever appears on screen. yazi expands %s to the
 # selected paths (the hovered one when nothing is selected) and shell-quotes
 # them itself, so it must NOT be wrapped in quotes.
-bookokrat = [
-  # Open in bookokrat (terminal reader) in a half split beside this pane:
-  # hover the PDF on the left, read it on the right. Opening a second PDF
-  # swaps the file in the reader pane rather than splitting again.
-  #
-  # Sharing one window with yazi's preview is safe: yazi draws its preview with
-  # Unicode placeholders at the default z-index, while bookokrat's page is a
-  # classic placement at z=-1, and tmux-kitty-image-gc only ever deletes z=-1.
-  { run = 'bookokrat-split %s', desc = "bookokrat (half split)", orphan = true },
+farleaf = [
+  # Open in farleaf (terminal reader) in a half split beside this pane: hover
+  # the PDF on the left, read it on the right. Opening a second PDF swaps the
+  # file in the reader pane rather than splitting again.
+  { run = 'farleaf-split %s', desc = "farleaf (half split)", orphan = true },
 ]
 mac = [
   # Safari on the Mac, through the tunnels connect_nvim.sh sets up: mac-open
@@ -37,11 +33,11 @@ mac = [
 [open]
 # No `open`/`reveal` fallbacks in the list the way the Mac has them: those are
 # macOS `open(1)`, which does not exist in the container. HTML is the one type
-# that still reaches the Mac, through mac-open. bookokrat is the only
-# PDF/EPUB viewer on this side — there is no X11 and no display to send one to.
+# that still reaches the Mac, through mac-open. farleaf is the only PDF viewer
+# on this side — there is no X11 and no display to send one to. (EPUBs have no
+# reader here since bookokrat left; farleaf reads PDFs only.)
 prepend_rules = [
-  { url = "*.pdf",  use = "bookokrat" },
-  { url = "*.epub", use = "bookokrat" },
+  { url = "*.pdf",  use = "farleaf" },
   { url = "*.html", use = "mac" },
   { url = "*.htm",  use = "mac" },
 ]

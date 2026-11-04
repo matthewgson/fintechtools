@@ -270,7 +270,7 @@ echo ""
 # inside Singularity returns 0 or an 80×24 default.
 #
 # PDF viewing needs no X11 and no Mac-side helper: VimTeX/yazi open PDFs in
-# bookokrat, which draws in-terminal via the kitty graphics protocol over plain
+# farleaf, which draws in-terminal via the kitty graphics protocol over plain
 # SSH (no XQuartz, no -Y forwarding). The only forwards are mac-open's, above.
 
 # Singularity/Apptainer can't start containers on compute nodes post-2026, so we

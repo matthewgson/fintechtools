@@ -2,23 +2,27 @@
 -- into ~/.config/nvim/lua/plugins/.  Augments the LazyVim `lang.tex` extra
 -- (which installs lervag/vimtex) with this container's HPC / SSH viewer wiring.
 --
--- VIEWER: bookokrat (terminal PDF reader, native synctex).  bookokrat is
--- installed INSIDE the container (Dockerfile Stage 5f) and draws the PDF inline
--- via the kitty graphics protocol, which ghostty renders straight over SSH — no
--- X11/XQuartz, no PDF copy shipped to the Mac.  Because nvim and bookokrat run
--- on the same machine (the compute node), synctex works both ways:
---   * forward search  <localleader>lv  → bookokrat-forward opens/jumps the PDF
---     (it launches bookokrat in a tmux split if no instance is running yet).
---   * inverse search  (gd / Ctrl-click in bookokrat) → bookokrat-inverse jumps
---     nvim to the source line via `nvim --server $NVIM`.  Inverse is wired in
---     ~/.config/bookokrat/config.yaml (synctex_editor: bookokrat-inverse …).
--- The bookokrat-forward/-split/-inverse wrappers ship to ~/.local/bin (on PATH
--- inside the container) via sync_configs.sh.
+-- VIEWER: farleaf (terminal PDF reader, the user's own).  farleaf is installed
+-- INSIDE the container (Dockerfile Stage 5f) and draws the PDF inline via the
+-- kitty graphics protocol, which ghostty renders straight over SSH and inside
+-- herdr — no X11/XQuartz, no PDF copy shipped to the Mac.
+--   * forward search  <localleader>lv  → farleaf-forward asks `synctex view`
+--     (TinyTeX's synctex, Dockerfile Stage 5d) for the line's page and height
+--     and opens the PDF there in a herdr split, or types `:PAGE:Y` into the
+--     farleaf already showing it.
+--   * inverse search  Ctrl-click (or `gd`) in farleaf → farleaf runs
+--     $FARLEAF_SYNCTEX_EDITOR (set in .zshrc, and by farleaf-split), a helper
+--     `nvim --headless -c "VimtexInverseSearch {line} {file}"`; VimTeX finds
+--     the nvim that has the project open and goes to the line, and that nvim
+--     then focuses its own herdr pane (the autocmd below, herdr-focus-pane).
+--     Right-click is herdr's pane menu, hence Ctrl-click.
+-- The farleaf-forward/-split and herdr-focus-pane helpers ship to
+-- ~/.local/bin (on PATH inside the container) via sync_configs.sh.
 --
--- This replaces the previous sioyek-over-X11 viewer (removed) and the even
--- older `mac-open` viewer, which shipped a *copy* of the PDF to the Mac and
--- therefore lost synctex.  (The Mac-side `mac-open` bridge has since been
--- removed entirely; `pdf_open.lua` routes other PDF open callsites to bookokrat.)
+-- This replaces bookokrat (until 2026-10-29), the sioyek-over-X11 viewer
+-- before it, and the even older `mac-open` viewer, which shipped a *copy* of
+-- the PDF to the Mac and therefore lost synctex.  `pdf_open.lua` routes other
+-- PDF open callsites to farleaf.
 --
 -- Note: synctex must be emitted at compile time.  VimTeX's default latexmk
 -- options already include `-synctex=1`, and TinyTeX's engines support it, so no
@@ -50,10 +54,24 @@ return {
 			-- breaking every time VimTeX bumps its floor ahead of the pinned nvim.
 			vim.g.vimtex_version_check = 0
 
-			-- general viewer → bookokrat-forward <line> <col> <tex> <pdf>.
+			-- general viewer → farleaf-forward <line> <col> <tex> <pdf>.
 			vim.g.vimtex_view_method = "general"
-			vim.g.vimtex_view_general_viewer = "bookokrat-forward"
+			vim.g.vimtex_view_general_viewer = "farleaf-forward"
 			vim.g.vimtex_view_general_options = "@line @col @tex @pdf"
+
+			-- After an inverse search the focus is still on farleaf's pane (the
+			-- click was there): bring this nvim's own herdr pane forward. Same as
+			-- the Mac's vimtex.lua, which this file replaces on CIRCE.
+			vim.api.nvim_create_autocmd("User", {
+				group = vim.api.nvim_create_augroup("FarleafInverseSearch", { clear = true }),
+				pattern = "VimtexEventViewReverse",
+				callback = function()
+					local pane = vim.env.HERDR_PANE_ID
+					if vim.env.HERDR_ENV == "1" and pane and vim.fn.executable("herdr-focus-pane") == 1 then
+						vim.system({ "herdr-focus-pane", pane })
+					end
+				end,
+			})
 
 			-- Silence VimTeX log messages that fire on plugin reload (e.g. after
 			-- `:Lazy update` / LazyVim's auto-update, which re-sources plugins over

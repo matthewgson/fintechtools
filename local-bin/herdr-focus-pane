@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Focus herdr pane PANE: bring its tab forward, then step to it from the
+# pane that has the focus, one neighbor at a time (herdr focuses a tab by id
+# but a pane only by direction).
+#
+#   herdr-focus-pane PANE
+#
+# Caller: nvim, after an inverse search from farleaf (VimtexEventViewReverse
+# in ~/.config/nvim/lua/plugins/vimtex.lua): the Ctrl-click left the focus on
+# the reader's pane, and nvim brings its own pane forward.
+set -euo pipefail
+
+target=${1:?usage: herdr-focus-pane PANE}
+command -v herdr >/dev/null && command -v jq >/dev/null || exit 0
+
+tab=$(herdr pane get "$target" 2>/dev/null | jq -r '.result.pane.tab_id // empty') || exit 0
+[[ -n "$tab" ]] || exit 0
+focused_tab=$(herdr tab list 2>/dev/null | jq -r '.result.tabs[] | select(.focused) | .tab_id') || true
+[[ "$focused_tab" == "$tab" ]] || herdr tab focus "$tab" >/dev/null
+
+# Each step: the direction from the focused pane's rectangle to the target's.
+for _ in 1 2 3 4 5 6 7 8; do
+    layout=$(herdr pane layout --pane "$target" 2>/dev/null) || exit 0
+    read -r cur dir < <(jq -r --arg t "$target" '
+        .result.layout as $l
+        | ($l.panes[] | select(.pane_id == $l.focused_pane_id) | .rect) as $a
+        | ($l.panes[] | select(.pane_id == $t) | .rect) as $b
+        | $l.focused_pane_id + " " + (
+            if $b.x >= $a.x + $a.width then "right"
+            elif $b.x + $b.width <= $a.x then "left"
+            elif $b.y >= $a.y + $a.height then "down"
+            else "up" end)' <<<"$layout") || exit 0
+    [[ "$cur" == "$target" || -z "$cur" ]] && exit 0
+    herdr pane focus --pane "$cur" --direction "$dir" >/dev/null 2>&1 || exit 0
+done

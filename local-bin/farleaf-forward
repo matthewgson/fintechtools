@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# VimTeX forward search (source -> PDF) for farleaf.
+# Invoked by VimTeX as: farleaf-forward <line> <col> <tex> <pdf>
+#
+# `synctex view` (TeX Live's `synctex` package) gives the page and the height
+# of the line's first box on it; farleaf-split opens the PDF there, or, if a
+# farleaf already shows it, types the place into that one. Without synctex
+# (or a .synctex.gz) the PDF just opens.
+set -euo pipefail
+
+line=$1 col=$2 tex=$3 pdf=$4
+
+spot=""
+if command -v synctex >/dev/null; then
+    spot=$(synctex view -i "$line:$col:$tex" -o "$pdf" 2>/dev/null | awk -F: '
+        $1 == "Page" && p == "" { p = $2 }
+        $1 == "y" && p != "" && y == "" { y = $2 }
+        END { if (p != "") print p (y == "" ? "" : ":" y) }') || true
+fi
+
+exec farleaf-split "$pdf" ${spot:+"$spot"}

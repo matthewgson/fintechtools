@@ -57,7 +57,7 @@ echo
 # ── Discover what exists ──────────────────────────────────────────────────────
 # avante.nvim and github-copilot were dropped 2026-10-01 along with the plugins
 # themselves. Copies already on CIRCE are not deleted by a sync (no --delete).
-CONFIG_LIST=(bottom nvim yazi tmux bookokrat starship git)
+CONFIG_LIST=(bottom nvim yazi tmux starship git)
 CONFIGS_DIR="${SCRIPT_DIR}/configs"
 
 # LazyVim extras to DROP from the container's nvim config only. The nvim sync is
@@ -78,44 +78,35 @@ HAVE_CLAUDEMD=0; [ -f "${SCRIPT_DIR}/configs/claude/CLAUDE.md" ] && HAVE_CLAUDEM
 HAVE_CONNECT=0;  [ -f "${SCRIPT_DIR}/connect_nvim.sh" ]     && HAVE_CONNECT=1
 HAVE_HERDR=0;    [ -f "$HOME/.config/herdr/config.toml" ]   && HAVE_HERDR=1
 HAVE_MACOPEN=0;  [ -f "${SCRIPT_DIR}/local-bin/mac-open" ]   && HAVE_MACOPEN=1
-# bookokrat helper scripts. Source the LIVE Mac copies (where they're edited and
-# used) so changes sync without a manual repo update; fall back to the repo's
-# local-bin/ snapshot. Each row is  LIVE-PATH-UNDER-~ | REPO-SNAPSHOT | DEST-UNDER-~ .
+# Helper scripts shared by the Mac and the container. Source the LIVE Mac copies
+# (where they're edited and used) so changes sync without a manual repo update;
+# fall back to the repo's local-bin/ snapshot. Each row is
+# LIVE-PATH-UNDER-~ | REPO-SNAPSHOT | DEST-UNDER-~ .
 #
 # Because the LIVE copy wins, an edit made in this repo alone is thrown away by
 # the next sync. These files are shared between the Mac and the container, so a
 # change has to be written to BOTH ~/.local/... and the snapshot here.
 #
-# Rows 1-3 are the synctex/opener wrappers (VimTeX forward+inverse search, yazi's
-# PDF opener). Row 4 is the fix for bookokrat#179 — under Ghostty the reader
-# draws its page as a classic Kitty placement that tmux holds no cell for, so
-# switching windows leaves the page painted over the window you moved to;
-# tmux-kitty-image-gc deletes it from outside tmux and repaints any reader still
-# on screen. configs/tmux/tmux.conf's window-change hooks call it, and
-# bookokrat-split appends it to the reader's own command line for the exit case.
-# Row 5 is not a bookokrat helper but follows the same live-first rule:
-# tmux-resurrect-age prints the age of the last prefix Ctrl-s save for the
-# status-bar pill built by configs/tmux/modules/resurrect.conf.
+# Rows 1-3 are the PDF reader's: farleaf-split (yazi's and nvim's PDF opener, a
+# herdr split), farleaf-forward (VimTeX forward search via `synctex view`) and
+# herdr-focus-pane (inverse search: the nvim that VimTeX moved focuses its own
+# herdr pane, from configs/nvim/lua/plugins/vimtex.lua).
+# Row 4, tmux-resurrect-age, prints the age of the last prefix Ctrl-s save for
+# the status-bar pill built by configs/tmux/modules/resurrect.conf.
 #
-# NOT deployed any more: `.local/bin/override/bookokrat` and its
-# `.local/libexec/bookokrat-kitty-shim/tmux`. That pair forced bookokrat's
-# Unicode-placeholder anchor path on by answering its terminal probe with
-# "kitty". The anchor path places the page RELATIVE to a tmux-owned cell (Kitty
-# keys P=/Q=), which Ghostty 1.3.1 does not implement — it drops P/Q and paints
-# the page wherever the cursor sits, i.e. on top of yazi, with the reader's pane
-# left empty. Retired on the Mac 2026-09-04 and removed from here with it; do not
-# reintroduce either file.
-BOOKOKRAT_FILES=(
-  ".local/bin/bookokrat-split|local-bin/bookokrat-split|.local/bin/bookokrat-split"
-  ".local/bin/bookokrat-forward|local-bin/bookokrat-forward|.local/bin/bookokrat-forward"
-  ".local/bin/bookokrat-inverse|local-bin/bookokrat-inverse|.local/bin/bookokrat-inverse"
-  ".local/bin/tmux-kitty-image-gc|local-bin/tmux-kitty-image-gc|.local/bin/tmux-kitty-image-gc"
+# The bookokrat helpers (bookokrat-split/-forward/-inverse, tmux-kitty-image-gc)
+# were retired with bookokrat on 2026-10-29. A sync does not delete them from
+# CIRCE (no --delete), so they are removed there once, by hand.
+HELPER_FILES=(
+  ".local/bin/farleaf-split|local-bin/farleaf-split|.local/bin/farleaf-split"
+  ".local/bin/farleaf-forward|local-bin/farleaf-forward|.local/bin/farleaf-forward"
+  ".local/bin/herdr-focus-pane|local-bin/herdr-focus-pane|.local/bin/herdr-focus-pane"
   ".local/bin/tmux-resurrect-age|local-bin/tmux-resurrect-age|.local/bin/tmux-resurrect-age"
 )
-HAVE_BOOKOKRAT_SCRIPTS=1
-for _row in "${BOOKOKRAT_FILES[@]}"; do
+HAVE_HELPERS=1
+for _row in "${HELPER_FILES[@]}"; do
   IFS='|' read -r _live _repo _ <<<"$_row"
-  [ -f "$HOME/${_live}" ] || [ -f "${SCRIPT_DIR}/${_repo}" ] || HAVE_BOOKOKRAT_SCRIPTS=0
+  [ -f "$HOME/${_live}" ] || [ -f "${SCRIPT_DIR}/${_repo}" ] || HAVE_HELPERS=0
 done
 
 print_status "Will deploy:"
@@ -125,7 +116,7 @@ echo "  • ~/.config/{$(IFS=,; echo "${CONFIG_LIST[*]}")} → CIRCE"
 [ "$HAVE_TERM"     -eq 1 ] && echo "  • term_session.sh → CIRCE ~/sh/"
 [ "$HAVE_UDOCKER"  -eq 1 ] && echo "  • udocker_dev.sh → CIRCE ~/bin/  (udocker/F3 launcher)"
 [ "$HAVE_CLAUDEMD" -eq 1 ] && echo "  • configs/claude/CLAUDE.md → CIRCE ~/.claude/CLAUDE.md  (container notes for Claude)"
-[ "$HAVE_BOOKOKRAT_SCRIPTS" -eq 1 ] && echo "  • bookokrat helpers → CIRCE ~/.local/bin/  (${#BOOKOKRAT_FILES[@]} files)"
+[ "$HAVE_HELPERS"  -eq 1 ] && echo "  • helper scripts (farleaf-split, …) → CIRCE ~/.local/bin/  (${#HELPER_FILES[@]} files)"
 [ "$HAVE_HERDR"    -eq 1 ] && echo "  • ~/.config/herdr settings + plugins → CIRCE  (no sockets, logs or sessions)"
 [ "$HAVE_MACOPEN"  -eq 1 ] && echo "  • local-bin/mac-open → CIRCE ~/.local/bin/  (HTML/URLs → the Mac's Safari)"
 [ "$HAVE_CONNECT"  -eq 1 ] && echo "  • connect_nvim.sh → ~/  (local)"
@@ -165,7 +156,7 @@ _ok_cfg=()
 for cfg in "${CONFIG_LIST[@]}"; do
   # Per-cfg sync policy:
   #   replace: repo's configs/<cfg>/ fully replaces Mac's ~/.config/<cfg>/
-  #            (yazi — container-specific openers, e.g. bookokrat for PDFs).
+  #            (yazi — container-specific openers, e.g. farleaf for PDFs).
   #   overlay: Mac's copy is staged first, repo's configs/<cfg>/* layered on top
   #            (nvim — adds repo plugins without touching user's other plugins).
   #   default: Mac's ~/.config/<cfg> is source of truth.
@@ -178,7 +169,6 @@ for cfg in "${CONFIG_LIST[@]}"; do
     # set by udocker_dev.sh, points at it).
     git) _is_replace=1 ;;
     tmux) _is_replace=1 ;;   # repo owns the container tmux.conf (no Mac copy)
-    bookokrat) _is_replace=1 ;;   # repo owns the container bookokrat config
     starship) _is_replace=1 ;;   # repo owns the container prompt (warm SSH theme; Mac keeps its own)
     nvim) _is_overlay=1 ;;
   esac
@@ -317,8 +307,8 @@ if [ "$HAVE_UDOCKER" -eq 1 ]; then
   _staged+=("bin/udocker_dev.sh")
 fi
 
-if [ "$HAVE_BOOKOKRAT_SCRIPTS" -eq 1 ]; then
-  for _row in "${BOOKOKRAT_FILES[@]}"; do
+if [ "$HAVE_HELPERS" -eq 1 ]; then
+  for _row in "${HELPER_FILES[@]}"; do
     IFS='|' read -r _live _repo _dest <<<"$_row"
     _src="$HOME/${_live}"; [ -f "$_src" ] || _src="${SCRIPT_DIR}/${_repo}"  # prefer live
     mkdir -p "$STAGING/$(dirname "${_dest}")"

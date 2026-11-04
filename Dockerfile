@@ -141,7 +141,7 @@ RUN git clone -q --depth 1 --branch "v${QUARTO_TYPST_VERSION}" https://github.co
 FROM ubuntu:24.04
 
 LABEL maintainer="Matthew Son"
-LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Claude Code CLI + TinyTeX + bookokrat + herdr"
+LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Claude Code CLI + TinyTeX + farleaf + herdr"
 LABEL version="0.8"
 
 # ─── Version pins — bump here to upgrade any tool ────────────────────────────
@@ -167,10 +167,10 @@ ARG RESVG_VERSION=latest
 ARG FZF_VERSION=latest
 ARG ZOXIDE_VERSION=latest
 ARG BOTTOM_VERSION=latest
-# bookokrat = terminal PDF/EPUB reader (kitty graphics); the primary VimTeX/yazi
-# viewer now — renders in-terminal over SSH, no X11/XQuartz. Comes from the
-# matthewgson/bookokrat fork (tags vX.Y.Z-fork.N), not upstream: see Stage 5f.
-ARG BOOKOKRAT_VERSION=latest
+# farleaf = terminal PDF reader (kitty graphics), the user's own project
+# (matthewgson/farleaf); the VimTeX/yazi viewer, in-terminal over SSH and in
+# herdr, no X11/XQuartz. See Stage 5f.
+ARG FARLEAF_VERSION=latest
 # duckdb CLI = replstudio.nvim's parquet viewer (`:e data.parquet` → table).
 ARG DUCKDB_VERSION=latest
 # catppuccin/tmux = tmux status-bar theme, baked into the image and sourced
@@ -472,6 +472,7 @@ RUN QUARTO_VERSION=${QUARTO_VERSION} && \
 #   - collection-latexrecommended  (amsmath, hyperref, geometry, tools, …)
 #   - collection-fontsrecommended  (font packages used by most templates)
 #   - biber + biblatex             (modern bibliography stack — not in default)
+#   - synctex                      (the `synctex` CLI: VimTeX forward search via farleaf-forward)
 #
 # /opt/TinyTeX is read-only at runtime under Singularity SIF.  For extra
 # packages, install at runtime in user-mode — writes to $TEXMFHOME, which
@@ -498,52 +499,49 @@ RUN rm -rf /opt/TinyTeX && \
   collection-latexrecommended \
   collection-fontsrecommended \
   biber \
-  biblatex && \
+  biblatex \
+  synctex && \
   /opt/TinyTeX/bin/x86_64-linux/tlmgr path add && \
   /usr/local/bin/latexmk --version >/dev/null && \
   /usr/local/bin/pdflatex --version | head -1
 
-# ─── Stage 5e: PDF render fonts (for bookokrat) ─────────────────────────────
-# bookokrat (Stage 5f) renders PDF text via MuPDF, which falls back to system
-# fonts for any glyphs a PDF does not embed; fontconfig + a base font keep that
-# from rendering blank/tofu. No X11/Qt/xcb stack is needed — bookokrat draws
-# in-terminal via the kitty graphics protocol, so unlike the old sioyek viewer
-# it needs no X server (and no XQuartz on the Mac).
+# ─── Stage 5e: fontconfig + a base font ─────────────────────────────────────
+# Added for the old bookokrat viewer and kept for anything else that draws text
+# with system fonts. farleaf (Stage 5f) does not need them: its MuPDF is
+# compiled in with its own fonts.
 RUN apt-get update && \
   apt-get install -y --no-install-recommends \
   fontconfig \
   fonts-dejavu-core && \
   rm -rf /var/lib/apt/lists/*
 
-# ─── Stage 5f: bookokrat (primary terminal PDF/EPUB viewer) ─────────────────
-# Terminal reader that draws PDFs inline via the kitty graphics protocol, which
-# ghostty speaks — so VimTeX/yazi PDF viewing works straight over SSH with no
-# X11/XQuartz (no X server needed at all). Prebuilt static-ish
-# x86_64 gnu binary; the synctex wrapper scripts
-# (bookokrat-forward/-split/-inverse) ship via sync_configs.sh into ~/.local/bin.
+# ─── Stage 5f: farleaf (terminal PDF reader) ────────────────────────────────
+# The user's own reader (github.com/matthewgson/farleaf): draws PDFs inline
+# via the kitty graphics protocol, which ghostty speaks, so VimTeX/yazi PDF
+# viewing works straight over SSH and inside herdr, with no X server. It
+# compresses pages over SSH, and under herdr sends the next and previous pages
+# ahead (herdr re-sends images raw only once visible). The release binary is
+# dynamic (glibc >= 2.28), so F3 patches its PT_INTERP like any other in the
+# ROOT; it must live in the image, not in $HOME. The helper scripts
+# (farleaf-split, farleaf-forward) ship via sync_configs.sh into ~/.local/bin;
+# forward search needs TinyTeX's synctex (Stage 5d).
 #
-# The binary comes from the user's FORK's releases (matthewgson/bookokrat), not
-# from upstream. When the terminal can't read bookokrat's shared memory, which
-# is always the case over SSH, upstream sends every PDF page as ~18 MB of raw
-# RGB, so a page turn took ~2 s. The fork zlib-compresses those images (Kitty
-# o=z), and a page turn takes ~0.2–0.4 s (measured 2026-10-12). Its release
-# workflow builds the same tarball upstream ships, so only the repo differs
-# here. To follow a new upstream release: rebase the fork's main onto it, then
-# push a vX.Y.Z-fork.N tag. The workflow publishes the tarball, and
-# build_container.sh resolves the fork's latest release. The Mac keeps
-# Homebrew's upstream build: locally it uses shared memory, so the patch
-# doesn't apply there.
-RUN BOOKOKRAT_VERSION=${BOOKOKRAT_VERSION} && \
-  echo "Installing bookokrat ${BOOKOKRAT_VERSION} (matthewgson fork)" && \
-  curl -fL "https://github.com/matthewgson/bookokrat/releases/download/${BOOKOKRAT_VERSION}/bookokrat-${BOOKOKRAT_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
-  -o /tmp/bookokrat.tar.gz && \
-  mkdir -p /tmp/bookokrat-x && \
-  tar -C /tmp/bookokrat-x -xzf /tmp/bookokrat.tar.gz && \
-  BK_BIN="$(find /tmp/bookokrat-x -type f -name bookokrat | head -1)" && \
-  { [ -n "$BK_BIN" ] || { echo "ERROR: bookokrat binary missing in tarball" >&2; exit 1; }; } && \
-  install -m 0755 "$BK_BIN" /usr/local/bin/bookokrat && \
-  rm -rf /tmp/bookokrat.tar.gz /tmp/bookokrat-x && \
-  /usr/local/bin/bookokrat --version
+# build_container.sh resolves FARLEAF_VERSION to the latest release tag and
+# checks the linux-x64 tarball exists; the step below checks it against the
+# release's SHA256SUMS. AGPL: its license and the bundled libraries' go to
+# /usr/local/share/doc/farleaf.
+RUN FARLEAF_VERSION=${FARLEAF_VERSION} && \
+  echo "Installing farleaf ${FARLEAF_VERSION}" && \
+  mkdir -p /tmp/farleaf-x && cd /tmp/farleaf-x && \
+  curl -fLO "https://github.com/matthewgson/farleaf/releases/download/${FARLEAF_VERSION}/farleaf-linux-x64.tar.gz" && \
+  curl -fLO "https://github.com/matthewgson/farleaf/releases/download/${FARLEAF_VERSION}/SHA256SUMS" && \
+  grep ' farleaf-linux-x64.tar.gz$' SHA256SUMS | sha256sum -c - && \
+  tar -xzf farleaf-linux-x64.tar.gz && \
+  install -m 0755 farleaf-linux-x64/farleaf /usr/local/bin/farleaf && \
+  mkdir -p /usr/local/share/doc/farleaf && \
+  cp -R farleaf-linux-x64/LICENSE farleaf-linux-x64/licenses /usr/local/share/doc/farleaf/ && \
+  cd / && rm -rf /tmp/farleaf-x && \
+  /usr/local/bin/farleaf --version
 
 # ─── Stage 6: Neovim (latest stable release binary, x86_64) ─────────────────
 # NVIM_VERSION=latest (the default) resolves through GitHub's /releases/latest

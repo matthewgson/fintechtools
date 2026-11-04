@@ -4,8 +4,8 @@
 --
 -- Routes vim.ui.open (gx, the snacks explorer's `o`, and many other "open
 -- externally" callsites):
---   * PDFs open in bookokrat (terminal reader, in a tmux split via
---     bookokrat-split).
+--   * PDFs open in farleaf (terminal reader, in a herdr split via
+--     farleaf-split).
 --   * HTML files and http(s) URLs open in Safari on the Mac via mac-open,
 --     through the tunnels connect_nvim.sh sets up (see ~/.local/bin/mac-open).
 --     The container has no browser, so the default handler (xdg-open) had
@@ -36,10 +36,8 @@ return {
         if type(path) == "string" then
           local lower = path:lower()
           if lower:match("%.pdf$") then
-            -- nvim 0.12 strips TERM/TMUX/NVIM from job children (even explicit
-            -- env{} overrides), so bookokrat-split rediscovers tmux itself and
-            -- takes the editor socket as BK_NVIM — a name nvim leaves alone.
-            vim.system({ "bookokrat-split", path }, { env = { BK_NVIM = vim.v.servername } })
+            -- farleaf-split needs only HERDR_*, which nvim passes on.
+            vim.system({ "farleaf-split", path })
             return { wait = function() return { code = 0 } end }
           end
           if lower:match("^https?://") or lower:match("%.x?html?$") then

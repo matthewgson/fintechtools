@@ -31,8 +31,8 @@ configs without rebuilding):
 
 ```bash
 ./sync_configs.sh   # push to CIRCE: term_session.sh → ~/sh/, udocker_dev.sh → ~/bin/,
-                    # the bookokrat helpers → ~/.local/bin/,
-                    # ~/.config/{nvim,yazi,tmux,bookokrat,starship,…},
+                    # the farleaf helpers → ~/.local/bin/,
+                    # ~/.config/{nvim,yazi,tmux,starship,…},
                     # and the Mac's herdr settings + plugins
 ```
 
@@ -50,14 +50,14 @@ unpacked copy, so a rebuild is picked up with no manual step.
 | uv | Astral binary in `/usr/local/bin/` |
 | R | **4.x** from CRAN noble-cran40, default repo set to [**Posit Package Manager**](https://packagemanager.posit.co/) (`noble/latest`) so `install.packages()` pulls binary builds for Ubuntu instead of compiling from source |
 | Quarto | Latest GitHub release, installed at `/opt/quarto`, on `$PATH` as `quarto`. Bundles pandoc, typst + Deno. The bundled pandoc and typst are static, and under udocker F3 a static binary looks up `/opt/quarto/share` on the host, so the image replaces both with dynamic builds of the same versions (pandoc from `pandoc/core:<v>-ubuntu`, typst compiled in its own stage). PDF output works out of the box via the TinyTeX install below, or via typst. |
-| LaTeX | **TinyTeX** baked in at `/opt/TinyTeX` — installed via direct tarball pull from [`rstudio/tinytex-releases`](https://github.com/rstudio/tinytex-releases) (`TinyTeX-linux-x86_64-<TAG>.tar.xz`), no R/Rscript dependency in Stage 5d. Binaries symlinked into `/usr/local/bin` via `tlmgr path add` (with `sys_bin` pinned explicitly so the build does not fall back to `/root/.local/bin`). Ships `latexmk`, `pdflatex`, `xelatex`, `lualatex`, `biber`, plus `collection-latexrecommended`, `collection-fontsrecommended`, and `biblatex`. VimTeX (`lang.tex` extra) and Quarto find them automatically. The image is read-only at runtime, so extra packages install in user-mode — `TEXMFHOME` is pinned to `~/texmf` in zshenv so `tlmgr --usermode init-usertree && tlmgr --usermode install <pkg>` lands in a predictable, kpathsea-discoverable tree (no root required). Alternatively, rebuild the container with the package appended to Stage 5d. A pre-existing `~/.TinyTeX` install is honored — zshenv prepends it to `$PATH` so any user-installed extras win over the system copy. |
+| LaTeX | **TinyTeX** baked in at `/opt/TinyTeX` — installed via direct tarball pull from [`rstudio/tinytex-releases`](https://github.com/rstudio/tinytex-releases) (`TinyTeX-linux-x86_64-<TAG>.tar.xz`), no R/Rscript dependency in Stage 5d. Binaries symlinked into `/usr/local/bin` via `tlmgr path add` (with `sys_bin` pinned explicitly so the build does not fall back to `/root/.local/bin`). Ships `latexmk`, `pdflatex`, `xelatex`, `lualatex`, `biber`, plus `collection-latexrecommended`, `collection-fontsrecommended`, `biblatex`, and `synctex` (forward search). VimTeX (`lang.tex` extra) and Quarto find them automatically. The image is read-only at runtime, so extra packages install in user-mode — `TEXMFHOME` is pinned to `~/texmf` in zshenv so `tlmgr --usermode init-usertree && tlmgr --usermode install <pkg>` lands in a predictable, kpathsea-discoverable tree (no root required). Alternatively, rebuild the container with the package appended to Stage 5d. A pre-existing `~/.TinyTeX` install is honored — zshenv prepends it to `$PATH` so any user-installed extras win over the system copy. |
 | Editor | Neovim (latest) + LazyVim starter |
 | Own nvim plugins | [quarto-render.nvim](https://github.com/matthewgson/quarto-render.nvim) (Quarto CLI above) and [replstudio.nvim](https://github.com/matthewgson/replstudio.nvim) (R/Python REPL + plot pane), both cloned from GitHub by lazy.nvim, so the container runs what has been **pushed**. replstudio's container spec is `configs/nvim/lua/plugins/replstudio.lua`, which replaces the Mac's `dir =` copy. The image carries only the `duckdb` CLI for its parquet viewer. Its Python venv (`~/.local/share/replstudio/venv`) and R's `ragg` are installed at runtime, into `$HOME` |
 | LazyVim extras | Whatever the Mac's `~/.config/nvim/lazyvim.json` enables (the nvim sync is an overlay of it), minus `lang.rust`. No AI extras: avante.nvim and Copilot were removed 2026-10-01 |
 | Terminal | **tmux 3.6b** (multiplexer, built from source — newer than 24.04's apt 3.4, which is too old for ghostty's CSI-u extended keys over SSH and broke `Ctrl+Space`/`Ctrl+h/j/k/l`), **herdr** (agent multiplexer, built from source as a dynamic binary — see "herdr" below), Yazi (file manager) with all recommended deps, lazygit, `ncurses-term` (many terminfos) |
 | AI agents | `claude` (Claude Code) **is** bundled and runs well in-container under udocker/F3 (much snappier than the old ptrace runtime; F3's LD_PRELOAD path avoids the per-syscall tax). Running it locally on the Mac and driving the node over SSH is still an option. Copilot is **not** bundled in any form: neither the standalone `copilot` CLI nor the nvim Copilot/avante plugins and their language server (removed 2026-10-01 after repeated build failures). |
 | SSH | `openssh-client` (git/scp); sshd not used |
-| PDF viewer | **bookokrat** at `/usr/local/bin/bookokrat` — terminal PDF/EPUB reader (kitty graphics, renders over SSH; no X11). VimTeX (`<localleader>lv`), yazi, and snacks-explorer route PDFs to it (see "PDF viewing" below). |
+| PDF viewer | **farleaf** at `/usr/local/bin/farleaf` — terminal PDF reader (kitty graphics, renders over SSH and in herdr; no X11). VimTeX (`<localleader>lv`), yazi, and snacks-explorer route PDFs to it (see "PDF viewing" below). |
 
 Yazi deps included (per [yazi docs](https://yazi-rs.github.io/docs/installation)):
 `file`, `p7zip`, `jq`, `poppler-utils`, `fd`, `ripgrep`, `fzf`,
@@ -65,88 +65,54 @@ Yazi deps included (per [yazi docs](https://yazi-rs.github.io/docs/installation)
 
 ```
 
-## PDF viewing — bookokrat
+## PDF viewing — farleaf
 
-PDFs (and EPUBs) open in **bookokrat**, a terminal reader that draws inline via
-the kitty graphics protocol — which **ghostty** renders straight over SSH, so no
-X11/XQuartz and no Mac-side helper are involved. Synctex works both ways because
-Neovim and bookokrat run on the same node.
+PDFs open in **[farleaf](https://github.com/matthewgson/farleaf)**, the user's
+own terminal reader, which draws inline via the kitty graphics protocol, so
+**ghostty** shows it straight over SSH and inside herdr: no X11/XQuartz and no
+Mac-side helper. It replaced bookokrat on 2026-10-29.
 
-- **Binary** — baked into the image at `/usr/local/bin/bookokrat` (Dockerfile Stage 5f),
-  from the [`matthewgson/bookokrat`](https://github.com/matthewgson/bookokrat) fork's
-  releases (`vX.Y.Z-fork.N`), not upstream. Over SSH the terminal can't read
-  bookokrat's shared memory, so upstream sends every PDF page as ~18 MB of raw RGB
-  (~2 s per page turn); the fork zlib-compresses it (kitty `o=z`, ~0.5 MB,
-  ~0.2-0.4 s). `build_container.sh` resolves the fork's latest release. The Mac
-  keeps Homebrew's upstream build, since shared memory works locally.
-- **Wrappers** — synced to `~/.local/bin/` by `sync_configs.sh` (on `$PATH` inside the container):
-  - `bookokrat-split` — opens a PDF in a **half split beside the caller** (forwards
-    `$NVIM` for inverse search). Opening a second PDF respawns that same reader pane
-    rather than splitting again; opening one already on screen just jumps to it.
-    Panes carry the pane option `@bkfile`, which is how both are recognised.
-  - `bookokrat-forward` — VimTeX forward search (`<localleader>lv`): jumps an open instance, or launches one.
-  - `bookokrat-inverse` — synctex inverse search: `gd` / Ctrl-click in the PDF jumps Neovim to the source line.
-  - `tmux-kitty-image-gc` — takes the page **off the screen** when you switch away
-    from the reader or quit it (bookokrat#179). Under ghostty bookokrat draws a
-    classic kitty placement, which **tmux holds no cell for**, so a window switch
-    repaints the text and leaves the page painted over the window you switched to.
-    This writes the kitty delete escape straight to the client tty — around tmux's
-    pane-visibility rules, which would swallow it — then sends `C-l` to any reader
-    still on screen. Deletes are targeted at z-index `-1` / image id `1`, where
-    bookokrat draws and yazi does not, so a neighbouring preview survives. Wired in
-    `configs/tmux/tmux.conf` (`session-window-changed`, `client-session-changed`)
-    and appended to the reader's own command line by `bookokrat-split`. The repaint
-    on return cost ~1-1.5s here with upstream bookokrat, against ~100-300ms on
-    the Mac. That was the raw page crossing SSH, which the fork (above) compresses.
-    Only a reader that is **visible but not focused** actually leaks: with the
-    cursor in the reader, bookokrat tears its own placements down on focus-out and
-    this script finds nothing to do. That is why the bug reads as intermittent —
-    it depends on which pane had the cursor. `focus-events on` is therefore
-    load-bearing for images, not just for nvim. Measured 2026-09-07.
+- **Binary** — baked into the image at `/usr/local/bin/farleaf` (Dockerfile Stage
+  5f) from farleaf's GitHub release (`farleaf-linux-x64.tar.gz`, checked against
+  the release's `SHA256SUMS`); `build_container.sh` resolves the latest release.
+  It is a dynamic glibc binary, so it has to be in the image (F3 patches its
+  loader there), not in `$HOME`. Under herdr it sends the next and previous
+  pages ahead, so a page turn only moves images herdr already sent. The Mac
+  installs it with farleaf's `install.sh` (`~/.local/bin`).
+- **Helpers** — synced to `~/.local/bin/` by `sync_configs.sh` (on `$PATH` inside the container):
+  - `farleaf-split FILE [PAGE[:Y]]` — opens a PDF in a **half herdr split beside
+    the caller**. Opening a second PDF replaces the reader in that tab rather
+    than splitting again; opening one already open brings its pane forward.
+    farleaf does not run inside tmux.
+  - `farleaf-forward` — VimTeX forward search (`<localleader>lv`): `synctex view`
+    (TinyTeX's `synctex`, Stage 5d) gives the line's page and height; the PDF
+    opens there, or the farleaf already showing it is sent there (`:PAGE:Y`).
+  - Inverse search (farleaf 0.6.0+): **Ctrl-click** a line in farleaf (or `gd`)
+    and the nvim that has the project open goes to its source line and gets the
+    focus. farleaf runs `$FARLEAF_SYNCTEX_EDITOR` (set in `.zshrc`), VimTeX's
+    `VimtexInverseSearch`; right-click is herdr's pane menu.
+  - `herdr-focus-pane PANE` — focuses a herdr pane by id (herdr focuses panes
+    only by direction); nvim calls it after an inverse search.
 - **One file each, shared with the Mac.** `sync_configs.sh` prefers the LIVE
   `~/.local/bin/` copy over the repo's `local-bin/` snapshot, so an edit made live must be
   copied back to the repo **and** an edit made only in the repo is discarded by the
   next sync. Platform differences live inside the scripts (`uname -s`), which is how
-  `bookokrat-split` picks Homebrew's binary on the Mac and `/usr/local/bin/bookokrat`
+  `farleaf-split` picks `~/.local/bin/farleaf` on the Mac and `/usr/local/bin/farleaf`
   here.
-- **Retired: the `~/.local/bin/override/bookokrat` wrapper** (and its `tmux` shim
-  under `~/.local/libexec/`). It answered bookokrat's outer-terminal probe with
-  `kitty` to force the Unicode-placeholder anchor path back on. Ghostty 1.3.1 does
-  not implement the relative placements that path emits (kitty keys `P=`/`Q=`) — it
-  drops them and paints the page at the cursor, i.e. on top of yazi, leaving the
-  reader's pane empty. Removed 2026-09-04; it was never viable here in any case,
-  the anchor path being implemented only over SHM transmission while the shm object
-  lives in `/dev/shm` on the compute node and ghostty runs on the Mac. Do not
-  reintroduce it — `tmux-kitty-image-gc` is the supported fix.
-- **Config** — `configs/bookokrat/` → `~/.config/bookokrat/` (inverse search wired via `synctex_editor`).
 - **Wiring** — VimTeX (`configs/nvim/lua/plugins/vimtex.lua`, `general` viewer), yazi
-  (`*.pdf`/`*.epub` opener), and `vim.ui.open` / snacks-explorer
-  (`pdf_open.lua`, `snacks.lua`) all route PDFs to bookokrat.
+  (`*.pdf` opener), and `vim.ui.open` / snacks-explorer (`pdf_open.lua`,
+  `snacks.lua`) all route PDFs to farleaf. EPUBs have no reader here.
 
 ### Test
 
-After SSH'ing in via `./connect_nvim.sh`, from inside the container (in tmux):
+After SSH'ing in via `./connect_nvim.sh`, from a herdr pane in the container:
 
 ```bash
-bookokrat-split /work/g/gson/some.pdf   # opens in a new tmux split
+farleaf-split /work/g/gson/some.pdf   # opens in a herdr split
 ```
 
-In yazi: Enter on a `.pdf`/`.epub` opens it in a bookokrat split.
-In Neovim: `<localleader>lv` in a `.tex` forward-searches; `gd` / Ctrl-click in
-bookokrat jumps back to the source line.
-
-**Start tmux on this side first — "in tmux" above is not optional.** If you SSH
-in from inside a *local* tmux on the Mac and run bookokrat with no tmux here,
-bookokrat sees no `$TMUX`, emits raw kitty escapes instead of wrapping them for
-passthrough, and the local tmux swallows them: the reader's frame and scrollbar
-draw and the page never appears. `tm` first. It looks like a PDF that failed to
-load rather than a terminal problem, which is what makes it worth knowing.
-
-Nesting is otherwise fine. With tmux running on both sides the page renders
-correctly through both multiplexers, and nothing is left painted behind on an
-inner or an outer session switch — the leftover-page bug needs a single
-multiplexer, i.e. the ordinary bare-ghostty `connect_nvim.sh` case. Measured end
-to end with a real PDF, 2026-09-07.
+In yazi: Enter on a `.pdf` opens it in a farleaf split. In Neovim:
+`<localleader>lv` in a `.tex` forward-searches.
 
 ## HTML in Safari — mac-open
 
@@ -172,15 +138,15 @@ open it in **Safari on the Mac**, as they would locally. The container's
   Quarto or R Markdown page finds its `*_files/` folder, and **reload** shows a
   fresh render. The URL contains a random token, and the server answers only
   requests addressed to `127.0.0.1` or `localhost`.
-- **HTML and http(s) URLs only.** PDFs still go to bookokrat. A
+- **HTML and http(s) URLs only.** PDFs still go to farleaf. A
   `http://localhost:…` URL printed on the node (`quarto preview`) points at
   the node, not the Mac, so it will not load in Safari.
 
 ## herdr
 
 [herdr](https://herdr.dev) is the container's multiplexer, and the startup
-messages point only to it. tmux (`tm`) stays installed because bookokrat's PDF
-split still needs it. Start herdr by hand after `./connect_nvim.sh`:
+messages point only to it. tmux (`tm`) stays installed, though nothing here
+needs it any more (PDFs open in herdr splits). Start herdr by hand after `./connect_nvim.sh`:
 `herdr` attaches to the running server, or starts one and restores the saved
 layout.
 
@@ -234,9 +200,8 @@ layout.
 
 | cfg | Policy | Why |
 |---|---|---|
-| `yazi` | **replace** — repo's `configs/yazi/` becomes CIRCE's `~/.config/yazi/` | Container-specific openers (e.g. bookokrat for PDFs) |
+| `yazi` | **replace** — repo's `configs/yazi/` becomes CIRCE's `~/.config/yazi/` | Container-specific openers (e.g. farleaf for PDFs) |
 | `tmux` | **replace** — repo's `configs/tmux/` becomes CIRCE's `~/.config/tmux/` | Container-specific multiplexer config (replaced zellij); no Mac copy |
-| `bookokrat` | **replace** — repo's `configs/bookokrat/` becomes CIRCE's `~/.config/bookokrat/` | Container owns the bookokrat config |
 | `nvim` | **overlay** — Mac's `~/.config/nvim/` is staged, then `configs/nvim/*` is rsync'd on top | Keeps your Mac LazyVim config canonical; drops in the container plugins |
 | `bottom` | **default** — direct from Mac | No container-specific overrides needed |
 | `herdr` | **mirror, filtered** — Mac's `config.toml`, `plugins.json` and `plugins/` (minus `.git`), with the Mac's `$HOME` in `plugins.json` rewritten to CIRCE's | Same keys, theme and plugins as the Mac. Its sockets, logs and saved sessions are runtime state and stay put |

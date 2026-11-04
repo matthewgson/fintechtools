@@ -74,6 +74,13 @@ ROOT, so the ROOT sweep covers it, and `_INTERP_DIRS` covers it through
 is a server outliving a ROOT **re-setup**: its panes then preload a deleted
 libfakechroot. `udocker_dev.sh` warns about it at connect, and never kills it.
 
+`.zshrc` sets `HERDR_SOCKET_PATH` (the `/tmp` socket) only when herdr has not:
+until 2026-11-04 it overwrote the value herdr gives its panes, so inside a
+second session (`herdr --session NAME`, e.g. a test's throwaway one) every
+herdr command, farleaf-split's split included, went to the MAIN server. A
+test against CIRCE's live (pre-fix) `.zshrc` must export its own session's
+socket in the pane and check `herdr pane list` before acting.
+
 ### The repair un-patches what it restores
 
 `fintech-rootfs.tar` is the pristine image, so every binary in it still carries
@@ -234,14 +241,14 @@ lock-file commit.
   switch and zsh redraws the two-line prompt a row too high each time (2 lines
   lost per Esc/i). `.zshrc` now inits only if `prompt_starship_precmd` is
   undefined. Any other double `reset-prompt` in one widget does the same.
-* **The bookokrat helpers are ONE file each, shared by Mac and container.**
-  `bookokrat-{split,forward,inverse}`, `tmux-kitty-image-gc` and
-  `tmux-resurrect-age` all run on both sides, and `sync_configs.sh` prefers the LIVE `~/.local/bin/` copy over the
+* **The helper scripts are ONE file each, shared by Mac and container.**
+  `farleaf-split`, `farleaf-forward` and `tmux-resurrect-age` all run on both
+  sides, and `sync_configs.sh` prefers the LIVE `~/.local/bin/` copy over the
   repo's `local-bin/` snapshot. So an edit made live must be copied back here, **and an
   edit made only here is thrown away by the next sync** — write both. Platform
   differences go inside the file (`uname -s`), not in two copies of it: that is
-  how `bookokrat-split` picks `/opt/homebrew/bin/bookokrat` on the Mac and
-  `/usr/local/bin/bookokrat` in the container. Anything launching the reader
+  how `farleaf-split` picks `~/.local/bin/farleaf` on the Mac and
+  `/usr/local/bin/farleaf` in the container. Anything launching the reader
   from a non-login shell must name the binary by absolute path; `zsh -c` never
   sources `.zshrc`.
 
@@ -252,38 +259,25 @@ lock-file commit.
   `stat -f %m` prints filesystem info before failing, which breaks a BSD-first
   fallback on Linux.
 
-  **The `~/.local/bin/override/bookokrat` wrapper is retired — do not bring it
-  back.** It (with its `tmux` shim under `~/.local/libexec/`) answered
-  bookokrat's outer-terminal probe with `kitty` to force the
-  Unicode-placeholder anchor path on, the tmux-trackable one, so a PDF page
-  would not survive a tmux window switch (bookokrat#179). Ghostty 1.3.1 does
-  not implement the relative placements that path emits (Kitty keys `P=`/`Q=`):
-  it drops them and paints the page at the cursor — on top of yazi, with the
-  reader's pane left empty. Retired on the Mac 2026-09-04, and it could never
-  have worked here anyway, the anchor path being implemented only over SHM
-  transmission while bookokrat's shm object sits in `/dev/shm` on the compute
-  node and Ghostty runs on the Mac. #179 is handled instead by
-  `tmux-kitty-image-gc`: `configs/tmux/tmux.conf`'s `session-window-changed` /
-  `client-session-changed` hooks call it, and `bookokrat-split` appends it to
-  the reader's own command line for the exit case. It deletes only Kitty z-index
-  -1 and image id 1 — where bookokrat draws and where yazi does not — so a
-  preview in the neighbouring pane survives. Repaint cost ~1-1.5s here with
-  upstream bookokrat, against ~100-300ms on the Mac. That was the ~18 MB raw page
-  crossing SSH, which the fork below fixes.
-* **bookokrat comes from the user's fork, `matthewgson/bookokrat`** (Dockerfile
-  Stage 5f and the `TOOL_VERSIONS` row in `build_container.sh`). Never point it
-  back at `bugzmanov`. Upstream sends PDF pages uncompressed when the terminal
-  can't read its shared memory (always, over SSH): ~18 MB and ~2 s per page
-  turn. The fork compresses them to ~0.5 MB and ~0.2-0.4 s. A new upstream
-  version reaches the image only after the fork's `main` is rebased onto it and
-  tagged `vX.Y.Z-fork.N`, which lets its release workflow publish the tarball.
-  A tag alone is not a release: GitHub runs no workflows on a fork until
-  "enable them" is clicked in its Actions tab (UI only; `gh workflow enable`
-  does not lift it), and a tag pushed while they are off is never replayed —
-  delete and re-push it. `build_container.sh` stops before `podman build` if
-  the fork has no release or the release lacks the linux-gnu tarball.
-  Source: `03_Programming/10_Bookokrat_fork`. The Mac stays on Homebrew's
-  upstream build, since locally the patch never applies.
+* **PDFs are farleaf, the user's own reader (`matthewgson/farleaf`, source in
+  `03_Programming/11_Farleaf`)**, which replaced bookokrat on 2026-10-29
+  (Dockerfile Stage 5f and the `TOOL_VERSIONS` row in `build_container.sh`;
+  the stage checks the tarball against the release's `SHA256SUMS`). Its Linux
+  release is a dynamic glibc 2.28 binary, so it belongs in the image like every
+  CLI tool. A new farleaf version reaches the image when a `vX.Y.Z` tag's
+  release workflow has published `farleaf-linux-x64.tar.gz`;
+  `build_container.sh` stops before `podman build` if it has not. farleaf does
+  not run inside tmux: `farleaf-split` opens it in a herdr split. VimTeX
+  forward search needs TinyTeX's `synctex` (Stage 5d). Inverse search (farleaf
+  0.6.0+, 2026-11-04): Ctrl-click or `gd` in farleaf runs
+  `$FARLEAF_SYNCTEX_EDITOR` (`.zshrc`, and farleaf-split's default), a helper
+  `nvim --headless -c "VimtexInverseSearch {line} {file}"`; the nvim VimTeX
+  moves then focuses its herdr pane (`configs/nvim/lua/plugins/vimtex.lua`, the
+  `herdr-focus-pane` helper). Right-click is herdr's pane menu, not farleaf's.
+  bookokrat's helpers (`bookokrat-*`, `tmux-kitty-image-gc`), its config and
+  the tmux hooks went with it. A sync does not delete files on CIRCE, so their
+  copies there (`~/.local/bin/bookokrat-*`, `~/.local/bin/tmux-kitty-image-gc`,
+  `~/.config/bookokrat`) are removed by hand, once.
 * **HTML files and URLs open in the Mac's Safari through `mac-open`**
   (`local-bin/mac-open`, container-only, synced to `~/.local/bin`). yazi's `o`
   on `.html`/`.htm`, and nvim's `vim.ui.open` (the snacks explorer's `o`,

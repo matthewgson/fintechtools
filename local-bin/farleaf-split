@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# Open a PDF in farleaf (terminal PDF reader), in a half split beside the
+# caller: a herdr split under herdr. Outside herdr: run in the current
+# terminal. tmux is not supported (farleaf cannot draw inside tmux).
+#
+#   farleaf-split FILE [PAGE[:Y]]
+#
+# PAGE[:Y] opens the file there (Y: points from the page's top, as SyncTeX
+# gives it; see farleaf-forward). If the file is already open, that reader is
+# brought forward and sent there instead.
+#
+# Callers: yazi's PDF opener, the snacks explorer and vim.ui.open in nvim, and
+# farleaf-forward (VimTeX). nvim 0.12 strips TERM, TMUX and NVIM from the
+# environment of every child it spawns, but not HERDR_*, which is all this
+# needs.
+set -euo pipefail
+
+file=${1:?usage: farleaf-split FILE [PAGE[:Y]]}
+spot=${2:-}
+# Canonical path: reuse-matching below compares argv across callers (yazi,
+# nvim, vimtex) that may spell the same file differently.
+file=$(realpath -- "$file" 2>/dev/null) || file=$1
+
+say() {
+    if [[ "${HERDR_ENV:-}" == 1 ]]; then
+        herdr notification show "farleaf" --body "$1" >/dev/null 2>&1 || printf 'farleaf: %s\n' "$1" >&2
+    elif [[ -n "${TMUX:-}" ]]; then
+        tmux display-message -d 4000 "farleaf: $1" 2>/dev/null || printf 'farleaf: %s\n' "$1" >&2
+    else
+        printf 'farleaf: %s\n' "$1" >&2
+    fi
+}
+
+# Preflight: the file has to be readable now, before anything is spawned.
+# On the CIRCE sshfs mounts (~/mnt/circe-{home,work}) the path can vanish
+# underneath you (cmount's 12h watchdog, a VPN drop, a laptop sleep) while
+# yazi goes on listing it from its cache, and yazi's opener is `orphan = true`
+# (stdout and stderr go to /dev/null): without this, pressing `o` would look
+# like it did nothing at all.
+if [[ ! -r "$file" ]]; then
+    case "$file" in
+        "$HOME"/mnt/circe-*) say "cannot read ${file##*/} (CIRCE mount is down: run cmount)" ;;
+        *)                   say "cannot read ${file##*/} (missing or unreadable)" ;;
+    esac
+    exit 1
+fi
+
+# The Mac installs farleaf with its install.sh (~/.local/bin); the CIRCE
+# container has it in the image (/usr/local/bin, Dockerfile). Named outright:
+# the herdr pane's shell is interactive, but this keeps the guesswork out.
+if [[ -n "${FARLEAF_BIN:-}" ]]; then
+    reader_path=$FARLEAF_BIN   # another build, for testing
+elif [[ "$(uname -s)" == Darwin ]]; then
+    reader_path=$HOME/.local/bin/farleaf
+else
+    reader_path=/usr/local/bin/farleaf
+fi
+[[ -x "$reader_path" ]] || reader_path=$(command -v farleaf) || {
+    say "no farleaf binary found"; exit 127
+}
+
+# Inverse search (farleaf 0.6.0+): Ctrl-click or `gd` on a PDF that LaTeX built
+# with -synctex=1 runs this with {line} and {file} filled in (no shell).
+# VimTeX finds the nvim that has the project open and goes there; that nvim
+# then focuses its own herdr pane (VimtexEventViewReverse, in
+# ~/.config/nvim/lua/plugins/vimtex.lua). `quitall!` ends the helper nvim even
+# if VimTeX did not load. A FARLEAF_SYNCTEX_EDITOR already set wins.
+default_editor='nvim --headless -c "VimtexInverseSearch {line} {file}" -c "quitall!"'
+export FARLEAF_SYNCTEX_EDITOR=${FARLEAF_SYNCTEX_EDITOR:-$default_editor}
+
+# --- herdr -------------------------------------------------------------------
+#   - already open in this workspace → bring that tab forward (and go to PAGE)
+#   - another reader in this tab     → close it and open this file in its place
+#   - otherwise                      → half split to the right of the caller
+# herdr has no per-pane tags, but `pane process-info` reports each pane's
+# foreground argv, and the reader is exec'd, so the file it shows is its last
+# argument.
+if [[ "${HERDR_ENV:-}" == 1 && -n "${HERDR_PANE_ID:-}" ]] && command -v herdr >/dev/null; then
+    ws=${HERDR_WORKSPACE_ID:-}
+    tab=${HERDR_TAB_ID:-}
+
+    # Each reader pane in the workspace, as "<pane> <tab> <file>".
+    readers=$(
+        herdr pane list ${ws:+--workspace "$ws"} 2>/dev/null \
+            | jq -r '.result.panes[] | "\(.pane_id) \(.tab_id)"' \
+            | while read -r p t; do
+                herdr pane process-info --pane "$p" 2>/dev/null \
+                    | jq -r --arg p "$p" --arg t "$t" '
+                        .result.process_info.foreground_processes[]?
+                        | select(.argv[0] | test("(^|/)farleaf$"))
+                        | "\($p) \($t) \(.argv[-1])"' || true
+            done
+    ) || true
+
+    found_pane="" found_tab="" reuse=""
+    while read -r p t f; do
+        [[ -n "$p" ]] || continue
+        if [[ "$f" == "$file" ]]; then found_pane=$p found_tab=$t; break; fi
+        [[ "$t" == "$tab" && -z "$reuse" ]] && reuse=$p
+    done <<< "$readers"
+
+    if [[ -n "$found_pane" ]]; then
+        # Type the place into it: Esc leaves any prompt or sidebar, then
+        # `:PAGE:Y` and Enter (`pane run` sends text and Enter).
+        if [[ -n "$spot" ]]; then
+            herdr pane send-keys "$found_pane" esc >/dev/null 2>&1 || true
+            herdr pane run "$found_pane" ":$spot" >/dev/null 2>&1 || true
+        fi
+        # herdr can focus a tab by id but a plain pane only by direction, so:
+        # a reader in another tab gets its tab brought forward; one in this tab
+        # is already on screen, and gets the cursor if it sits to the right.
+        if [[ "$found_tab" != "$tab" ]]; then
+            exec herdr tab focus "$found_tab" >/dev/null
+        fi
+        right=$(herdr pane neighbor --pane "$HERDR_PANE_ID" --direction right 2>/dev/null \
+                    | jq -r '.result.neighbor.neighbor_pane_id // empty' 2>/dev/null) || true
+        [[ "$right" == "$found_pane" ]] && herdr pane focus --pane "$HERDR_PANE_ID" --direction right >/dev/null
+        exit 0
+    fi
+
+    # herdr cannot restart a pane's process in place: close the old reader
+    # first, which gives its half back to the caller, so the new split lands
+    # at the same half-and-half.
+    [[ -n "$reuse" ]] && herdr pane close "$reuse" >/dev/null 2>&1 || true
+
+    # The path travels as an env var, never inside the typed command line:
+    # macOS bash 3.2's printf %q mangles non-ASCII (a ’ in a file name came
+    # out as invalid UTF-8, and the reader opened nothing).
+    pane=$(herdr pane split --pane "$HERDR_PANE_ID" --direction right \
+               --cwd "$(dirname -- "$file")" --env "FL_FILE=$file" \
+               --env "FARLEAF_SYNCTEX_EDITOR=$FARLEAF_SYNCTEX_EDITOR" --focus \
+               | jq -r '.result.pane.pane_id')
+    [[ -n "$pane" && "$pane" != null ]] || { say "herdr split failed"; exit 1; }
+
+    # A herdr split always starts an interactive shell, so type the command
+    # into it. `exec` makes the reader the pane's only process: quitting it
+    # ends the pane, and it puts the file into argv for the lookup above.
+    herdr pane run "$pane" "exec $(printf '%q' "$reader_path")${spot:+ -p $spot} \"\$FL_FILE\"" >/dev/null
+    exit 0
+fi
+
+if [[ -n "${TMUX:-}" ]]; then
+    say "farleaf cannot draw inside tmux; open it from herdr or a plain terminal"
+    exit 1
+fi
+exec "$reader_path" ${spot:+-p "$spot"} "$file"

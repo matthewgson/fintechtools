@@ -248,7 +248,7 @@ resolve_latest_versions() {
 #   keep  = the tag exactly as published
 #   tags  = tag-only repo (no GitHub Releases): newest v* tag via ls-remote
 # Override any one by exporting it, e.g. UV_VERSION=0.11.21 ./build_container.sh
-# bookokrat resolves from the user's fork, not upstream (Dockerfile Stage 5f says why).
+# farleaf (PDF reader) is the user's own project; Dockerfile Stage 5f installs its release.
 TOOL_VERSIONS='
 UV_VERSION              astral-sh/uv                 keep
 QUARTO_VERSION          quarto-dev/quarto-cli        strip
@@ -258,7 +258,7 @@ RESVG_VERSION           linebender/resvg             strip
 FZF_VERSION             junegunn/fzf                 strip
 ZOXIDE_VERSION          ajeetdsouza/zoxide           strip
 BOTTOM_VERSION          ClementTsang/bottom          keep
-BOOKOKRAT_VERSION       matthewgson/bookokrat        keep
+FARLEAF_VERSION         matthewgson/farleaf          keep
 HERDR_VERSION           herdrdev/herdr               keep
 DUCKDB_VERSION          duckdb/duckdb                keep
 CATPPUCCIN_TMUX_VERSION catppuccin/tmux              keep
@@ -266,7 +266,7 @@ TMUX_RESURRECT_VERSION  tmux-plugins/tmux-resurrect  tags
 '
 
 resolve_tool_versions() {
-  local var repo mode ver bk="" qv="" summary=""
+  local var repo mode ver fl="" qv="" summary=""
   while read -r var repo mode; do
     [ -n "$var" ] || continue
     ver="${!var:-}"
@@ -284,12 +284,12 @@ resolve_tool_versions() {
     fi
     if [ -z "$ver" ]; then
       print_error "Could not resolve the latest ${repo} release for ${var}."
-      [ "$var" = BOOKOKRAT_VERSION ] && \
-        print_status "A fork tag becomes a release only once its Actions run publishes it: https://github.com/${repo}/actions"
+      [ "$var" = FARLEAF_VERSION ] && \
+        print_status "A tag becomes a release only once its Actions run publishes it: https://github.com/${repo}/actions"
       print_status "Pin it and re-run, e.g.: ${var}=<version> $0"
       exit 1
     fi
-    [ "$var" = BOOKOKRAT_VERSION ] && bk="$ver"
+    [ "$var" = FARLEAF_VERSION ] && fl="$ver"
     [ "$var" = QUARTO_VERSION ] && qv="$ver"
     BUILD_ARGS+=( --build-arg "${var}=${ver}" )
     summary="${summary} ${repo##*/}=${ver}"
@@ -298,14 +298,14 @@ resolve_tool_versions() {
 
   resolve_quarto_tools "$qv"
 
-  # The fork's release is assembled by its own workflow, one upload per matrix
-  # target, so a release can exist without the linux-gnu tarball Stage 5f
-  # fetches (that job failed, or is still running). Catch it here, not as a 404
-  # halfway through the build.
+  # farleaf's release is assembled by its own workflow, one upload per target,
+  # so a release can exist without the linux-x64 tarball Stage 5f fetches (that
+  # job failed, or is still running). Catch it here, not as a 404 halfway
+  # through the build.
   if ! curl -fsSLI -o /dev/null \
-       "https://github.com/matthewgson/bookokrat/releases/download/${bk}/bookokrat-${bk}-x86_64-unknown-linux-gnu.tar.gz" 2>/dev/null; then
-    print_error "bookokrat ${bk} has no x86_64-unknown-linux-gnu tarball on matthewgson/bookokrat."
-    print_status "Wait for its release workflow (https://github.com/matthewgson/bookokrat/actions), or pin BOOKOKRAT_VERSION to an earlier fork tag."
+       "https://github.com/matthewgson/farleaf/releases/download/${fl}/farleaf-linux-x64.tar.gz" 2>/dev/null; then
+    print_error "farleaf ${fl} has no farleaf-linux-x64.tar.gz on matthewgson/farleaf."
+    print_status "Wait for its release workflow (https://github.com/matthewgson/farleaf/actions), or pin FARLEAF_VERSION to an earlier tag."
     exit 1
   fi
 }
@@ -556,7 +556,7 @@ collect_transfer_decisions() {
 
   # ── configs/scripts (sync_configs.sh) ────────────────────────────────────────
   # Default YES: this is what makes the build a true one-shot. The rootfs tar
-  # carries the image (incl. the bookokrat binary on the fast node-local rootfs);
+  # carries the image (incl. the farleaf binary on the fast node-local rootfs);
   # sync_configs.sh pushes the configs + ~/.local/bin wrappers. Together the node
   # is fully ready in one run — no manual steps, and no heavy binaries dumped onto
   # the at-quota FUSE home.
@@ -648,7 +648,7 @@ usage() {
   echo
   echo "Workflow (one-shot — leaves the node fully ready):"
   echo "  1. Build Docker image with Podman (cleans old images first)"
-  echo "  2. Export flat rootfs tar with 'podman export' (incl. the bookokrat binary)"
+  echo "  2. Export flat rootfs tar with 'podman export' (incl. the farleaf binary)"
   echo "  3. Remove built image + prune dangling layers (disk cleanup)"
   echo "  4. Transfer rootfs tar to CIRCE ${REMOTE_ROOTFS_PATH} (optional)"
   echo "  5. Run ./sync_configs.sh — push configs + ~/.local/bin wrappers (optional, default yes)"

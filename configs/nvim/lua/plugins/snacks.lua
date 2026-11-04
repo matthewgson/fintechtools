@@ -10,8 +10,8 @@
 -- Setting explorer.trash = false skips the trash commands entirely and uses
 -- the plain delete fallback, which works on any filesystem.
 --
--- Also routes the explorer's open action so PDFs open in bookokrat (terminal
--- reader, tmux split) instead of the default opener; non-PDFs fall through to
+-- Also routes the explorer's open action so PDFs open in farleaf (terminal
+-- reader, herdr split) instead of the default opener; non-PDFs fall through to
 -- vim.ui.open (yazi/snacks preview images in-terminal; see pdf_open.lua).
 --
 -- Show hidden (dotfiles) and git-ignored files in the explorer by default
@@ -123,13 +123,16 @@ return {
                   return
                 end
                 if item.file:match("%.pdf$") then
-                  -- nvim 0.12 strips TERM/TMUX/NVIM from job children (even
-                  -- explicit env{} overrides), so bookokrat-split rediscovers
-                  -- tmux itself and takes the editor socket as BK_NVIM — a
-                  -- name nvim leaves alone.
-                  vim.system({ "bookokrat-split", item.file }, { env = { BK_NVIM = vim.v.servername } })
+                  -- farleaf in a herdr split beside this pane (farleaf-split
+                  -- needs only HERDR_*, which nvim passes on to its children).
+                  vim.system({ "farleaf-split", item.file })
                 else
-                  vim.ui.open(item.file)
+                  -- Report an opener that cannot start (mac-open missing from
+                  -- PATH, say), as snacks' own explorer_open does.
+                  local _, err = vim.ui.open(item.file)
+                  if err then
+                    Snacks.notify.error("Failed to open `" .. item.file .. "`:\n- " .. err)
+                  end
                 end
               end,
             },

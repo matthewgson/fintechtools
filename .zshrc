@@ -1,6 +1,12 @@
 export XDG_CONFIG_HOME="$HOME/.config"
 export PATH=$HOME/local/bin:$PATH
 export EDITOR=nvim
+# farleaf inverse search: Ctrl-click or `gd` on a PDF built with -synctex=1 goes
+# to that source line in the nvim that has the project open (VimTeX finds it;
+# configs/nvim/lua/plugins/vimtex.lua then focuses its herdr pane). farleaf
+# fills in {line} and {file} and runs this without a shell; `quitall!` ends the
+# helper nvim even if VimTeX did not load. farleaf-split sets the same default.
+export FARLEAF_SYNCTEX_EDITOR='nvim --headless -c "VimtexInverseSearch {line} {file}" -c "quitall!"'
 
 # Container: glibc loads locale data from the HOST path, so point LOCPATH at the
 # ROOT's (see the Locale block in udocker_dev.sh). Without it zsh runs in the C
@@ -24,8 +30,6 @@ function y() {
 }
 export PATH="$HOME/.local/bin:$PATH"
 
-# bookokrat on $PATH is the image's real /usr/local/bin/bookokrat. The old
-# ~/.local/bin/override wrapper is retired; see CLAUDE.md before reviving it.
 typeset -U path   # re-sourcing .zshrc must not stack duplicate PATH entries
 
 # === Zoxide Initialization ===
@@ -88,7 +92,10 @@ tm() { tmux new-session -A -s "${1:-main}"; }
 # binary, which breaks every pane (see the Dockerfile's herdr stage), so it is
 # refused here: upgrade by rebuilding the image.
 if [ -n "${container_uuid:-}" ]; then
-  export HERDR_SOCKET_PATH="/tmp/${USER}/herdr/herdr.sock"
+  # Keep the socket herdr gives its own panes: in a second session (`herdr
+  # --session NAME`), overriding it sent that session's herdr commands
+  # (farleaf-split's split, say) to the main server (2026-11-04).
+  export HERDR_SOCKET_PATH="${HERDR_SOCKET_PATH:-/tmp/${USER}/herdr/herdr.sock}"
   mkdir -p -m 700 "${HERDR_SOCKET_PATH:h}" 2>/dev/null
   touch -c "$HERDR_SOCKET_PATH" "${HERDR_SOCKET_PATH:h}/herdr-client.sock" 2>/dev/null
   herdr() {
