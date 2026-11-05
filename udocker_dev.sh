@@ -96,14 +96,27 @@ _root="$(udocker inspect -p "$UDOCKER_CONTAINER" 2>/dev/null || true)"
 # connect (same node) would have pulled the ROOT out from under them. Prints
 # "PID PATH-IN-ROOT" per process; costs one pgrep, and only while a newer tar
 # waits.
+#
+# mac-open's page server is not counted. It starts on first use and runs until
+# the job ends, so counting it held back a new image for the whole job
+# (2026-11-05: up since 10-19). It holds no work, and the next mac-open
+# restarts it from whatever ROOT is current, so setup stops it instead
+# (_stop_page_server).
 _holders=""
+_is_page_server() { tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null | grep -q '/mac-open --serve'; }
 _root_users() {
     [ -n "$_root" ] && [ -d "$_root" ] || return 0
     local real p exe
     real="$(cd -P "$_root" 2>/dev/null && pwd)" || return 0
     for p in $(pgrep -u "$USER" 2>/dev/null); do
         exe="$(readlink "/proc/$p/exe" 2>/dev/null)" || continue
-        case "$exe" in "$real"/*) echo "$p ${exe#"$real"}" ;; esac
+        case "$exe" in "$real"/*) _is_page_server "$p" || echo "$p ${exe#"$real"}" ;; esac
+    done
+}
+_stop_page_server() {
+    local p
+    for p in $(pgrep -u "$USER" -f '/mac-open --serve' 2>/dev/null); do
+        _is_page_server "$p" && kill "$p" 2>/dev/null
     done
 }
 
@@ -163,6 +176,7 @@ if _need_setup; then
             udocker install --force 1>&2 || { err "udocker install --force failed"; exit 1; }
             [ -x "$_patchelf" ] || { err "patchelf still missing after --force"; exit 1; }
         fi
+        _stop_page_server   # it runs from the ROOT about to go; mac-open restarts it
         udocker rm  "$UDOCKER_CONTAINER" >/dev/null 2>&1 || true   # clean partial state
         udocker rmi "$UDOCKER_IMAGE"      >/dev/null 2>&1 || true
         udocker import "$FINTECH_TAR" "$UDOCKER_IMAGE" 1>&2 || { err "import failed"; exit 1; }
@@ -819,6 +833,29 @@ if [ -n "$_root" ] && [ -x "$_cl_exe" ] && [ -e "$_root/lib64/ld-linux-x86-64.so
     fi
 fi
 
+# ── ...and keep Claude's NATIVE installer out of $HOME ────────────────────────
+# Claude Code's auto-updater, or `claude install`, puts a native build in
+# ~/.local/share/claude/versions/<v> (~330 MB) and links ~/.local/bin/claude to
+# it. .zshrc puts ~/.local/bin ahead of /usr/local/bin, so in every interactive
+# shell that link wins over the wrapper above. It is the same Bun ELF with a
+# stock PT_INTERP, but it lives in $HOME, where F3 never patches anything:
+#   claude: relocation error: <ROOT>//usr/lib/x86_64-linux-gnu/libc.so.6:
+#   symbol _dl_find_dso_for_object, version GLIBC_PRIVATE not defined
+# Hit 2026-11-05: a remote-control test started claude through bare
+# `udocker run`, without the DISABLE_* env below, and it updated itself
+# ("Update installed") into $HOME. The build can never run on this side, so
+# drop the link and the versions it points into. ~/.claude.json keeps
+# "installMethod": "native", which does nothing while the updater is off.
+_cl_native="$HOME/.local/bin/claude"
+if [ -L "$_cl_native" ]; then
+    case "$(readlink "$_cl_native")" in
+        "$HOME"/.local/share/claude/versions/*)
+            rm -f "$_cl_native"
+            rm -rf "$HOME/.local/share/claude/versions"
+            err "removed a native Claude install from \$HOME (it shadowed the container's claude and cannot run under F3)" ;;
+    esac
+fi
+
 # ── Locale: hand glibc the container's locale data by HOST path ──────────────
 # setlocale() opens its data through glibc-INTERNAL calls that libfakechroot
 # cannot interpose (same wall as resolv.conf in the DNS block below), so it
@@ -1108,6 +1145,7 @@ ENVS=( --env="HOME=$HOME"
        --env="SHELL=/bin/zsh"
        --env="CLAUDE_CONFIG_DIR=$CC_LOCAL"
        --env="CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
+       --env="DISABLE_AUTOUPDATER=1"   # implied by the line above; named, since an update breaks claude here
        --env="NODE_OPTIONS=${ENVS_NODE_OPTIONS:-}" )
 [ -n "${_LOCPATH:-}" ] && ENVS+=( --env="LOCPATH=$_LOCPATH" )   # see the Locale block
 

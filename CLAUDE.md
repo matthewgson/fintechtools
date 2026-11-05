@@ -86,6 +86,15 @@ refreshed (they would be stamped newer than the tar and never take the new
 image's), and `_reap_repair` does not restore from the tar (it would mix two
 images in one ROOT).
 
+mac-open's page server (`mac-open --serve`) is **not** a holder (2026-11-05). It
+runs until the job ends, so counting it held back the farleaf image for the
+whole job. Setup stops it (`_stop_page_server`), and the next `mac-open`
+restarts it from the new ROOT. If a connect keeps reporting holders, read their
+command lines (`/proc/PID/cmdline`) before blaming herdr. On 2026-11-05 two of
+them were `while pgrep -f "<pattern>"; do sleep 20; done; <next step>` waiters.
+Each loop's own command line contains the pattern, so `pgrep -f` matches the
+loop itself, and the loop never ends and never runs its next step.
+
 `.zshrc` sets `HERDR_SOCKET_PATH` (the `/tmp` socket) only when herdr has not:
 until 2026-11-04 it overwrote the value herdr gives its panes, so inside a
 second session (`herdr --session NAME`, e.g. a test's throwaway one) every
@@ -199,6 +208,18 @@ lock-file commit.
   binary that a reaper tar restore reverted to stock, covered above. Check
   `readelf -l <bin> | grep interpreter` to tell them apart — a container path
   means healthy, a bare `/lib64/...` means one of the latter two.
+  A **fourth** gives the same error from interactive shells only: Claude's
+  **native** installer in `$HOME`. The auto-updater, or `claude install`, puts a
+  Bun build in `~/.local/share/claude/versions/<v>` and links
+  `~/.local/bin/claude` to it. `.zshrc` puts `~/.local/bin` ahead of
+  `/usr/local/bin`, so that link shadows the wrapper, and F3 never patches
+  anything in `$HOME`. Check with `whence -a claude`. On 2026-11-05 a
+  remote-control test ran claude through bare `udocker run`, without
+  `udocker_dev.sh`'s env, and the claude in it updated itself into `$HOME`.
+  `udocker_dev.sh` now removes such a link and its versions on every connect,
+  and passes `DISABLE_AUTOUPDATER=1` explicitly. Start claude only through
+  `udocker_dev.sh` (`-i -c '...'` for scripts), never through a hand-rolled
+  `udocker run`.
 
   **herdr is why the Dockerfile builds one tool from source on purpose.** Its
   release binary is static musl, and a multiplexer does nothing *but* spawn
