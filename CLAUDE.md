@@ -268,6 +268,18 @@ lock-file commit.
   directory-form `en_US.UTF-8` into the ROOT and passes
   `LOCPATH=<ROOT>/usr/lib/locale`; `.zshrc` sets it too for older tmux servers.
   Check: `s="░▒▓❯"; print ${(m)#s}` must be 4, not 12.
+* **nvim yanks reach the Mac clipboard only through `configs/nvim/lua/plugins/clipboard.lua`.**
+  LazyVim sets `clipboard=unnamedplus` unless `$SSH_CONNECTION` is set, and
+  udocker does not pass that variable into the container. nvim enables its OSC 52
+  provider by itself only while `clipboard` is empty, and the node has no
+  xclip/xsel/wl-copy, so until 2026-11-05 every yank stayed inside nvim
+  (`provider#clipboard#Executable()` returned `""`). The overlay sets
+  `g:clipboard`: copy over OSC 52, which herdr passes on to Ghostty when there is
+  no `DISPLAY`, and paste from nvim's own copy of the last yank. herdr forwards
+  clipboard writes from panes but not reads, so an OSC 52 paste would wait 10 s
+  on every `p`. Mac text goes in with Cmd-V. When testing it headless, put the
+  yank and the check in separate `-c` commands. nvim holds clipboard updates
+  until a command batch ends, so a check in the same `luafile` misses the yank.
 * **Prompt erases lines above on vi-mode switch = starship initialised twice.**
   The image's `/etc/zsh/zshrc` already runs `starship init zsh`; a second init in
   `.zshrc` wraps its `zle-keymap-select`, so `zle reset-prompt` runs twice per
