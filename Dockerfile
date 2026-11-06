@@ -141,26 +141,28 @@ RUN git clone -q --depth 1 --branch "v${QUARTO_TYPST_VERSION}" https://github.co
 FROM ubuntu:24.04
 
 LABEL maintainer="Matthew Son"
-LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Claude Code CLI + TinyTeX + farleaf + herdr"
-LABEL version="0.8"
+LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Claude Code + GitHub Copilot + OpenAI Codex CLIs + TinyTeX + farleaf + herdr"
+LABEL version="0.9.1"
 
 # ─── Version pins — bump here to upgrade any tool ────────────────────────────
 ARG UV_VERSION=latest
 ARG QUARTO_VERSION=latest
 ARG TINYTEX_TAG=v2026.06
-# Neovim and Claude Code track the LATEST release on every build (see Stage 6 and
-# Stage 11). build_container.sh resolves `latest` to the concrete version before
+# Neovim, Claude Code, GitHub Copilot, and OpenAI Codex track the LATEST release on every build
+# (see Stage 6 and Stage 11). build_container.sh resolves `latest` to the concrete version before
 # calling podman and passes it back in as a --build-arg — that is what makes the
 # layer cache invalidate when upstream publishes, and what puts the exact version
 # in the build log. Building the Dockerfile directly, with no --build-arg, still
 # gets the newest release; it just may reuse a cached layer.
-# Pin either one by passing e.g. --build-arg NVIM_VERSION=v0.12.4.
+# Pin one by passing e.g. --build-arg NVIM_VERSION=v0.12.4.
 #
 # Tracking latest is also what VimTeX wants: it supports only the CURRENT stable
 # Neovim, and a lagging pin is exactly what broke .tex highlighting before
 # (see configs/nvim/lua/plugins/vimtex.lua).
 ARG NVIM_VERSION=latest
 ARG CLAUDE_CODE_VERSION=latest
+ARG COPILOT_VERSION=latest
+ARG CODEX_VERSION=latest
 ARG LAZYGIT_VERSION=latest
 ARG YAZI_VERSION=latest
 ARG RESVG_VERSION=latest
@@ -791,18 +793,27 @@ RUN mkdir -p -m 755 /etc/apt/keyrings && \
 # machinery were removed (2026-06-24). Run SLURM commands on the CIRCE login
 # node, or a host shell (ssh -J circe <node>) — not inside the container.
 
-# ─── Stage 11: claude-code CLI + tree-sitter ─────────────────────────────────
+# ─── Stage 11: coding CLIs + tree-sitter ─────────────────────────────────────
 # @anthropic-ai/claude-code       : Anthropic Claude terminal coding agent. Kept
 #     as an in-container option; under udocker's Fakechroot/F3 it's far more
 #     responsive than under the old ptrace runtime (Claude is syscall-heavy, which
 #     F3's LD_PRELOAD path avoids). Running `claude` on the Mac and driving this
 #     box over SSH is still an option.
+# @github/copilot                 : GitHub Copilot terminal coding agent. Its npm
+#     launcher selects a dynamic Linux binary, which F3 patches at setup.
+# @openai/codex                  : OpenAI Codex terminal coding agent (GPT models).
+#     The npm launcher is Node, but the agent itself is a STATIC musl binary
+#     (vendor/x86_64-unknown-linux-musl/bin/codex), so it bypasses libfakechroot
+#     exactly like gh/static git: the shell commands it spawns are looked up on
+#     the HOST. udocker_dev.sh writes a /usr/local/bin/codex wrapper for that.
+#     Its bundled bwrap sandbox cannot work on CIRCE (no userns), so run it with
+#     --sandbox danger-full-access / --dangerously-bypass-approvals-and-sandbox.
 # tree-sitter-cli                 : required by nvim-treesitter to compile parsers.
 #
 # No Copilot anything (removed 2026-10-01): avante.nvim and copilot.lua are gone
 # from the nvim config on both sides because they kept failing to build, so
-# @github/copilot-language-server has nothing left to serve. The standalone
-# GitHub Copilot CLI (@github/copilot) was never installed.
+# @github/copilot-language-server remains intentionally absent. The standalone
+# GitHub Copilot CLI is independent of those removed Neovim integrations.
 # Do NOT run `claude --version` here to log the version. Claude Code ships as a
 # Bun-compiled binary, and this image is built --platform linux/amd64 on an
 # arm64 Mac, so every RUN executes under QEMU emulation — where Bun segfaults:
@@ -822,8 +833,10 @@ RUN mkdir -p -m 755 /etc/apt/keyrings && \
 # binary works until the first reap and then dies with a GLIBC_PRIVATE
 # relocation error that looks nothing like a missing file.
 RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+  "@github/copilot@${COPILOT_VERSION}" \
+  "@openai/codex@${CODEX_VERSION}" \
   tree-sitter-cli && \
-  npm ls -g --depth=0 @anthropic-ai/claude-code || true
+  npm ls -g --depth=0 @anthropic-ai/claude-code @github/copilot @openai/codex || true
 
 # ─── Stage 11b: Starship prompt ──────────────────────────────────────────────
 RUN curl -sS https://starship.rs/install.sh | sh -s -- --yes

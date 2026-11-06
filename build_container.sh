@@ -7,7 +7,7 @@ set -e # Exit on any error
 
 # Configuration
 IMAGE_NAME="fintech-tools"
-VERSION="0.9"
+VERSION="0.9.1"
 # Flat rootfs tar produced by `podman export` — deployed to CIRCE.
 ROOTFS_TAR="$HOME/fintech-rootfs.tar"
 REMOTE_USER="gson"
@@ -193,7 +193,7 @@ purge_old_images() {
 # ─────────────────────────────────────────────────────────────────────────────
 # Resolve "track latest" versions to concrete ones before building.
 #
-# The Dockerfile defaults NVIM_VERSION and CLAUDE_CODE_VERSION to `latest` and
+# The Dockerfile defaults NVIM_VERSION, CLAUDE_CODE_VERSION, COPILOT_VERSION, and CODEX_VERSION to `latest` and
 # can resolve that itself, but doing it HERE buys two things a bare `latest`
 # cannot:
 #   * cache invalidation — a --build-arg that still reads `latest` is an
@@ -206,12 +206,12 @@ purge_old_images() {
 #
 # Both lookups are best-effort: on a network failure we fall back to the literal
 # `latest`, and the Dockerfile resolves it (correctly, just cache-permitting).
-# Override either by exporting NVIM_VERSION / CLAUDE_CODE_VERSION before running.
+# Override any one by exporting NVIM_VERSION / CLAUDE_CODE_VERSION / COPILOT_VERSION / CODEX_VERSION before running.
 # ─────────────────────────────────────────────────────────────────────────────
 BUILD_ARGS=()
 
 resolve_latest_versions() {
-  local nv cc
+  local nv cc cp cx
 
   # GitHub's /releases/latest redirect resolves to the newest NON-prerelease tag,
   # so this tracks stable and never a nightly. -w %{url_effective} avoids needing
@@ -230,9 +230,21 @@ resolve_latest_versions() {
     [ -n "$cc" ] || { print_warning "Could not resolve latest claude-code — leaving it to the Dockerfile"; cc="latest"; }
   fi
 
-  NVIM_RESOLVED="$nv"; CLAUDE_CODE_RESOLVED="$cc"
-  BUILD_ARGS=( --build-arg "NVIM_VERSION=${nv}" --build-arg "CLAUDE_CODE_VERSION=${cc}" )
-  print_status "Tracking latest → Neovim ${nv}, claude-code ${cc}"
+  cp="${COPILOT_VERSION:-}"
+  if [ -z "$cp" ]; then
+    cp=$(npm view @github/copilot version 2>/dev/null | tr -d '[:space:]')
+    [ -n "$cp" ] || { print_warning "Could not resolve latest GitHub Copilot CLI — leaving it to the Dockerfile"; cp="latest"; }
+  fi
+
+  cx="${CODEX_VERSION:-}"
+  if [ -z "$cx" ]; then
+    cx=$(npm view @openai/codex version 2>/dev/null | tr -d '[:space:]')
+    [ -n "$cx" ] || { print_warning "Could not resolve latest OpenAI Codex CLI — leaving it to the Dockerfile"; cx="latest"; }
+  fi
+
+  NVIM_RESOLVED="$nv"; CLAUDE_CODE_RESOLVED="$cc"; COPILOT_RESOLVED="$cp"; CODEX_RESOLVED="$cx"
+  BUILD_ARGS=( --build-arg "NVIM_VERSION=${nv}" --build-arg "CLAUDE_CODE_VERSION=${cc}" --build-arg "COPILOT_VERSION=${cp}" --build-arg "CODEX_VERSION=${cx}" )
+  print_status "Tracking latest → Neovim ${nv}, claude-code ${cc}, GitHub Copilot CLI ${cp}, OpenAI Codex ${cx}"
 
   resolve_tool_versions
 }
@@ -429,8 +441,8 @@ main() {
 
   if podman build --platform linux/amd64 -t "${IMAGE_NAME}:${VERSION}" "${BUILD_ARGS[@]}" .; then
     end_timer "Docker image build"
-    print_success "✓ Built with Neovim ${NVIM_RESOLVED}, claude-code ${CLAUDE_CODE_RESOLVED}"
-    send_pushover_notification "✅ Docker Build Complete" "FinTech Tools built (${IMAGE_NAME}:${VERSION}) — nvim ${NVIM_RESOLVED}, claude-code ${CLAUDE_CODE_RESOLVED}"
+    print_success "✓ Built with Neovim ${NVIM_RESOLVED}, claude-code ${CLAUDE_CODE_RESOLVED}, GitHub Copilot CLI ${COPILOT_RESOLVED}, OpenAI Codex ${CODEX_RESOLVED}"
+    send_pushover_notification "✅ Docker Build Complete" "FinTech Tools built (${IMAGE_NAME}:${VERSION}) — nvim ${NVIM_RESOLVED}, claude-code ${CLAUDE_CODE_RESOLVED}, Copilot ${COPILOT_RESOLVED}, Codex ${CODEX_RESOLVED}"
   else
     print_error "Failed to build Docker image"
     send_pushover_notification "❌ Build Failed" "Docker image build failed. Check logs for details."

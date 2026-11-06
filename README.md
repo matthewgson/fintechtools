@@ -1,4 +1,4 @@
-# FinTech Tools Container — v0.9
+# FinTech Tools Container — v0.9.1
 
 HPC container for Financial / Quantitative computing. Workflow has migrated
 from VSCode Remote-SSH (legacy, still works) to **Neovim** SSH.
@@ -41,7 +41,7 @@ The launcher (udocker, Fakechroot/F3) imports the rootfs into node-local `/tmp`
 and enters the container. It auto-refreshes when the tar is newer than the
 unpacked copy, so a rebuild is picked up with no manual step.
 
-## What's inside (v0.9)
+## What's inside (v0.9.1)
 
 | Stack | Detail |
 |---|---|
@@ -55,7 +55,7 @@ unpacked copy, so a rebuild is picked up with no manual step.
 | Own nvim plugins | [quarto-render.nvim](https://github.com/matthewgson/quarto-render.nvim) (Quarto CLI above) and [replstudio.nvim](https://github.com/matthewgson/replstudio.nvim) (R/Python REPL + plot pane), both cloned from GitHub by lazy.nvim, so the container runs what has been **pushed**. replstudio's container spec is `configs/nvim/lua/plugins/replstudio.lua`, which replaces the Mac's `dir =` copy. The image carries only the `duckdb` CLI for its parquet viewer. Its Python venv (`~/.local/share/replstudio/venv`) and R's `ragg` are installed at runtime, into `$HOME` |
 | LazyVim extras | Whatever the Mac's `~/.config/nvim/lazyvim.json` enables (the nvim sync is an overlay of it), minus `lang.rust`. No AI extras: avante.nvim and Copilot were removed 2026-10-01 |
 | Terminal | **tmux 3.6b** (multiplexer, built from source — newer than 24.04's apt 3.4, which is too old for ghostty's CSI-u extended keys over SSH and broke `Ctrl+Space`/`Ctrl+h/j/k/l`), **herdr** (agent multiplexer, built from source as a dynamic binary — see "herdr" below), Yazi (file manager) with all recommended deps, lazygit, `ncurses-term` (many terminfos) |
-| AI agents | `claude` (Claude Code) **is** bundled and runs well in-container under udocker/F3 (much snappier than the old ptrace runtime; F3's LD_PRELOAD path avoids the per-syscall tax). Running it locally on the Mac and driving the node over SSH is still an option. Copilot is **not** bundled in any form: neither the standalone `copilot` CLI nor the nvim Copilot/avante plugins and their language server (removed 2026-10-01 after repeated build failures). |
+| AI agents | `claude` (Claude Code), `copilot` (GitHub Copilot CLI) and `codex` (OpenAI Codex CLI) are bundled, all installed globally with npm into `/usr/lib/node_modules`. `claude` runs well in-container under udocker/F3 (much snappier than the old ptrace runtime). `codex`'s agent is a **static musl** binary, so it bypasses libfakechroot like `gh`: `udocker_dev.sh` writes a `/usr/local/bin/codex` wrapper that puts host-path symlinks to the container's bash/git/ssh first on `PATH` and sets `SHELL` (see the `codex` block there; not yet verified on a node). Codex's own bwrap sandbox cannot work on CIRCE (no user namespaces), so run it with `--sandbox danger-full-access`. The nvim Copilot/avante plugins and `copilot-language-server` stay removed (2026-10-01). |
 | SSH | `openssh-client` (git/scp); sshd not used |
 | PDF viewer | **farleaf** at `/usr/local/bin/farleaf` — terminal PDF reader (kitty graphics, renders over SSH and in herdr; no X11). VimTeX (`<localleader>lv`), yazi, and snacks-explorer route PDFs to it (see "PDF viewing" below). |
 
