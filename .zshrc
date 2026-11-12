@@ -225,6 +225,19 @@ _nvim_heal() {
   : > "$sentinel"
 }
 nvim() { _nvim_unstick_clones; _nvim_heal; command nvim "$@"; }
+
+# ── Re-enter the working directory after a filesystem remount ────────────────
+# 2026-11-12: RC remounted Quobyte under the running session, and every pane
+# kept its cwd on the old, detached mount. From then on everything relative
+# (git, lazygit, starship's git module, `ls`) failed with "Transport endpoint
+# is not connected", while $PWD still named the right directory. If "." is no
+# longer the directory $PWD names, enter $PWD again through the live mount.
+# preexec covers the first command typed at a prompt drawn before the remount;
+# precmd covers the prompt itself. Two stat()s each; -q skips chpwd hooks.
+_cwd_heal() { [[ -z $PWD || . -ef $PWD ]] || cd -q -- "$PWD" 2>/dev/null; }
+autoload -Uz add-zsh-hook
+add-zsh-hook preexec _cwd_heal
+add-zsh-hook precmd _cwd_heal
 alias vim=nvim
 # `vi` is deliberately NOT aliased — it stays the system vi. The image's
 # /etc/zsh/zshrc still sets `alias vi="nvim"` and is sourced before this file, so

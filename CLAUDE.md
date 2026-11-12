@@ -178,6 +178,77 @@ or `.rev` file, since they hold nothing. If `HEAD` itself, or the ref `HEAD`
 points at, is empty, it removes the plugin dir, and lazy re-clones it at the
 lock-file commit.
 
+### A third look-alike: NUL-padded small files on `$HOME`
+
+Since 2026-11-09, **every file under 4096 bytes written to CIRCE's Quobyte
+`/home` reads back as 4096 bytes: the real content, then NULs.** `stat` still
+reports the true size, and `tail -c` (which seeks from the end) sees only NULs.
+Files of 4096 bytes or more are written intact (measured: 4095 B is padded,
+4096 B is clean). `truncate` does not repair a padded file, and neither does
+freeing your own space. The user quota had room. What showed 100% was the
+shared 23 TB volume (`df -h /home`, 150 GB free). This is RC's to fix. The
+repro: `printf 'hello\n' > ~/f; cat ~/f | wc -c` prints 4096.
+
+By 2026-11-12 the fault depended on which host was **reading**. The login node
+read small files correctly again, and its `/home` was mounted from
+`quobyte.rc.usf.edu:7861` instead of `quobyte-eth`. mdc-1057-13-13 still read
+every small file created since about 11-09 as padded, no matter which host wrote
+it, on **`/work` as well as `/home`**. Older files read correctly. Run the probe
+on the compute node: a clean result on the login node proves nothing.
+
+Symptoms follow from whichever small file was written last:
+
+* starship: `TOML parse error at line <last+1>, column <4096 - size + 1>: key
+  with no value` at every shell start. The column is the tell: 2134 real bytes
+  + 1962 NULs = 4096.
+* lazygit: "Git version must be at least 2.32.0" while the static git is 2.43.
+  The `git --version` probe failed on `bad config line N`.
+* nvim (Lua configs), yazi (TOML), the `~/.local/bin` helper scripts, and
+  `~/.claude/{settings,.credentials}.json`, which breaks a fresh node's seed.
+
+**A `sync_configs.sh` run caused the mass damage.** Every sync rewrites every
+file (the staging copy has fresh mtimes), so the 15:44 run that day padded 26
+configs at once. The sync now pads every small text file in the staging copy
+to 4096 bytes with trailing newlines, which TOML, Lua, JSON, sh, gitconfig and
+`.ignore` all ignore. It does this always, without a probe, because a probe
+from the Mac only reaches the login node. `udocker_dev.sh` writes its two
+generated `~/.local/lib/*.cjs` files the same way (`_write_home_padded`).
+Until 2026-11-12 they were 1960 and 2035 bytes, so every node process failed
+with `node-dns-shim.cjs:52 SyntaxError: Invalid or unexpected token`: codex,
+copilot, tree-sitter, Mason's LSPs and the CONNECT proxy. The files on CIRCE were repaired the same way, in place:
+NULs stripped, padded with newlines, written via temp + `mv`. To find damaged
+files, look for NUL bytes in small text files (`tr -cd '\000' < f | wc -c`);
+their size is not a multiple of 4096.
+
+Runtime writers are covered where it matters: `container.gitconfig` and
+`lazygit.gitconfig` live on node-local scratch, NUL-stripped and validated by
+the static git (`FINTECH_CONTAINER_GITCONFIG`), and the Claude config seed
+strips NULs from the top-level JSON it copies from `~/.claude`. herdr rewrites
+its own `config.toml`, which it did from a padded copy that day (4097 bytes,
+NULs inside). If herdr misbehaves while this lasts, check that file first.
+Not a rebuild issue.
+
+### After a Quobyte remount: processes left on a dead mount
+
+RC fixed the NUL padding by restarting each node's Quobyte client, and on
+2026-11-12 (12:22–12:32) it did so on mdc-1057-13-11/12/13 **under running
+jobs**. SLURM still showed the jobs RUNNING, but every process kept its cwd on
+the old, detached mount: every herdr pane's zsh, nvim, claude, the herdr server
+itself, cargo, and Python jobs. `readlink /proc/PID/cwd` reads
+`/g/gson/...` (the path without its `/work` or `/home` prefix), and any access
+fails with `Transport endpoint is not connected`. lazygit was the first thing
+to visibly break. Absolute paths still work, so `cd $PWD` in the pane fixes
+it. zsh's `$PWD` keeps the right name.
+
+Now automatic: `.zshrc`'s `_cwd_heal` (preexec + precmd) re-enters `$PWD`
+whenever `.` is no longer that directory, and the lazygit wrapper (REV=7)
+re-enters the launching shell's PWD, read from `/proc/$$/environ`, because
+dash replaces an inherited PWD it cannot validate with the dead getcwd().
+Shells started before the sync have no hook: `cd $PWD` once, or start
+new panes. A deleted directory is NOT a faithful test stand-in under F3:
+libfakechroot resolves even absolute paths through getcwd(), which fails
+outright for a deleted cwd but returns `(unreachable)/...` for a detached mount.
+
 ## Conventions that bite
 
 * **Config sync is one-way.** `sync_configs.sh` rsyncs repo-owned files onto

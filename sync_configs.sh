@@ -328,6 +328,29 @@ if [ "$HAVE_MACOPEN" -eq 1 ]; then
   _staged+=(".local/bin/mac-open")
 fi
 
+# ── Quobyte small-file padding guard (2026-11-09) ─────────────────────────────
+# While CIRCE's /home is in this state, every file under 4096 bytes written there
+# reads back as 4096 bytes: the real content, then NULs. stat still reports the
+# true size, and files of 4096 bytes or more come back intact. Every sync
+# rewrites every file (the staging copy has fresh mtimes), so one sync damaged
+# every small config at once: starship's "TOML parse error at line 84, column
+# 1963" (2134 real bytes + 1962 NULs), nvim's Lua, yazi, the helper scripts.
+# truncate does not repair such a file, and freeing your own space does not
+# either (the user quota had room; it is the shared volume, at 100%). So pad
+# every small TEXT file in the staging copy to 4096 bytes with trailing
+# newlines, which every format synced here (TOML, Lua, JSON, sh, gitconfig,
+# .ignore) ignores. ALWAYS, not on a probe: by 2026-11-12 the login node read
+# small files correctly again while mdc-1057-13-13 still read the same files
+# padded, and a probe from here only sees the login node.
+_npad=0
+while IFS= read -r -d '' _f; do
+  LC_ALL=C grep -Iq . "$_f" || continue        # binary: leave it alone
+  _sz=$(wc -c < "$_f" | tr -d ' ')
+  head -c $((4096 - _sz)) /dev/zero | tr '\0' '\n' >> "$_f"
+  _npad=$((_npad + 1))
+done < <(find "$STAGING" -type f -size +0c -size -4096c -print0)
+print_status "Padded ${_npad} small staged text file(s) to 4096 bytes (compute nodes read smaller new files back NUL-padded)"
+
 # Pre-create remote dirs
 remote_ssh "mkdir -p ~/.config ~/sh ~/bin ~/.local/bin ~/.claude" 2>/dev/null
 
