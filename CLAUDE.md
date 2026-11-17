@@ -245,7 +245,19 @@ whenever `.` is no longer that directory, and the lazygit wrapper (REV=7)
 re-enters the launching shell's PWD, read from `/proc/$$/environ`, because
 dash replaces an inherited PWD it cannot validate with the dead getcwd().
 Shells started before the sync have no hook: `cd $PWD` once, or start
-new panes. A deleted directory is NOT a faithful test stand-in under F3:
+new panes.
+
+nvim heals itself too: `configs/nvim/lua/plugins/cwd_heal.lua`. In the nvim
+that lived through the remount, `vim.uv.cwd()` gave `ENOTCONN`, `getcwd()`
+gave `""`, and `scandir(".")` failed, so the snacks explorer, `<leader>gg`
+lazygit, the pickers and `:terminal` all broke. A 3 s libuv timer, plus
+FocusGained and VimResume, notices a failed `uv.cwd()` and `chdir()`s back in
+by name. The name comes from the window or tab's local dir, then the last cwd
+the timer saw working, then `$PWD`. It also runs at startup, which covers an
+nvim launched from a dead pane. To heal an nvim that predates the file without
+restarting it, `dofile` it over the server socket (`readlink /proc/<pid>/fd/*`
+→ `/proc/net/unix` gives `/tmp/nvim.<uid>/<rand>/nvim.<pid>.0`). That was
+verified on the real dead mount on 2026-11-12. A deleted directory is NOT a faithful test stand-in under F3:
 libfakechroot resolves even absolute paths through getcwd(), which fails
 outright for a deleted cwd but returns `(unreachable)/...` for a detached mount.
 
@@ -291,6 +303,16 @@ outright for a deleted cwd but returns `(unreachable)/...` for a detached mount.
   and passes `DISABLE_AUTOUPDATER=1` explicitly. Start claude only through
   `udocker_dev.sh` (`-i -c '...'` for scripts), never through a hand-rolled
   `udocker run`.
+
+  **Remote Control (`claude rc`) needs feature-flag evaluation**, which
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_TELEMETRY` and
+  `DO_NOT_TRACK` each switch off (`Error: Remote Control requires feature-flag
+  evaluation...`). `udocker_dev.sh` set the first until 2026-11-16 (a leftover
+  of the proot-era freeze fix); it now passes only `DISABLE_AUTOUPDATER=1` and
+  `DISABLE_ERROR_REPORTING=1`. Never put one of the three back into the
+  container env or `.zshrc`. A running container keeps the old env: `env |
+  grep NONESSENTIAL` in a pane shows whether it is still set, and a reconnect
+  after the sync picks up the new one.
 
   **herdr is why the Dockerfile builds one tool from source on purpose.** Its
   release binary is static musl, and a multiplexer does nothing *but* spawn

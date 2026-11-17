@@ -142,7 +142,7 @@ FROM ubuntu:24.04
 
 LABEL maintainer="Matthew Son"
 LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Claude Code + GitHub Copilot + OpenAI Codex CLIs + TinyTeX + farleaf + herdr"
-LABEL version="0.9.1"
+LABEL version="0.9.2"
 
 # ─── Version pins — bump here to upgrade any tool ────────────────────────────
 ARG UV_VERSION=latest
@@ -314,12 +314,17 @@ RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
 # ─── Stage 3: Python 3.13 via deadsnakes (env defaults to this, not 3.12) ───
 # /usr/local/bin precedes /usr/bin in PATH, so the symlinks below make
 # `python` and `python3` resolve to 3.13 even though Ubuntu's 3.12 stays installed.
+# Launchpad's PPA host answers 503 for individual .debs now and then (it failed two
+# builds on 2026-11-17), so the install retries; debs already fetched are kept in
+# the apt cache between attempts, and the next one only asks for what is missing.
 RUN add-apt-repository -y ppa:deadsnakes/ppa && \
   apt-get update && \
-  apt-get install -y \
-  python3.13 \
-  python3.13-dev \
-  python3.13-venv && \
+  for i in 1 2 3 4 5 6; do \
+    apt-get install -y --fix-missing -o Acquire::Retries=5 \
+      python3.13 python3.13-dev python3.13-venv && break; \
+    [ "$i" = 6 ] && exit 1; \
+    echo "deadsnakes fetch failed (attempt $i/6), retrying in 30s"; sleep 30; \
+  done && \
   rm -rf /var/lib/apt/lists/* && \
   ln -sf /usr/bin/python3.13 /usr/local/bin/python3 && \
   ln -sf /usr/bin/python3.13 /usr/local/bin/python && \

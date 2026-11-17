@@ -1,4 +1,4 @@
-# FinTech Tools Container — v0.9.1
+# FinTech Tools Container — v0.9.2
 
 HPC container for Financial / Quantitative computing. Workflow has migrated
 from VSCode Remote-SSH (legacy, still works) to **Neovim** SSH.
@@ -41,7 +41,7 @@ The launcher (udocker, Fakechroot/F3) imports the rootfs into node-local `/tmp`
 and enters the container. It auto-refreshes when the tar is newer than the
 unpacked copy, so a rebuild is picked up with no manual step.
 
-## What's inside (v0.9.1)
+## What's inside (v0.9.2)
 
 | Stack | Detail |
 |---|---|

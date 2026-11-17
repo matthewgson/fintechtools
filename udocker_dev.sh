@@ -1295,8 +1295,12 @@ DNSPROXY
 #  on the CIRCE login node, or a host shell: ssh -J circe <node>.)
 
 # Runtime env: real HOME (image default is /home/gson — would break tools that
-# write to ~, e.g. starship's cache), zsh as SHELL, the Claude redirect, and the
-# no-telemetry flag.
+# write to ~, e.g. starship's cache), zsh as SHELL, and the Claude redirect.
+# Do NOT set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, DISABLE_TELEMETRY or
+# DO_NOT_TRACK: each one turns off feature-flag evaluation, and `claude rc`
+# (Remote Control) refuses to start without it. Until 2026-11-16 the first of
+# them was set here, and it also made the updater/error-reporting flags
+# redundant, so those two are named instead.
 # Note: under F3/fakechroot, glibc NSS (getpwuid/getpwnam) can't resolve our uid
 # to a name, so `id -un`/`whoami` show the bare number. This is an ACCEPTED
 # cosmetic limitation — a glibc-2.39-matched libfakechroot would fix it, but the
@@ -1308,8 +1312,8 @@ ENVS=( --env="HOME=$HOME"
        --env="LOGNAME=$USER"
        --env="SHELL=/bin/zsh"
        --env="CLAUDE_CONFIG_DIR=$CC_LOCAL"
-       --env="CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"
-       --env="DISABLE_AUTOUPDATER=1"   # implied by the line above; named, since an update breaks claude here
+       --env="DISABLE_AUTOUPDATER=1"   # an update breaks claude here (see the native-install note above)
+       --env="DISABLE_ERROR_REPORTING=1"
        --env="NODE_OPTIONS=${ENVS_NODE_OPTIONS:-}" )
 [ -n "${_LOCPATH:-}" ] && ENVS+=( --env="LOCPATH=$_LOCPATH" )   # see the Locale block
 
