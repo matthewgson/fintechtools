@@ -7,7 +7,7 @@ set -e # Exit on any error
 
 # Configuration
 IMAGE_NAME="fintech-tools"
-VERSION="0.9.2"
+VERSION="0.9.3"
 # Flat rootfs tar produced by `podman export` — deployed to CIRCE.
 ROOTFS_TAR="$HOME/fintech-rootfs.tar"
 REMOTE_USER="gson"
@@ -275,6 +275,7 @@ HERDR_VERSION           herdrdev/herdr               keep
 DUCKDB_VERSION          duckdb/duckdb                keep
 CATPPUCCIN_TMUX_VERSION catppuccin/tmux              keep
 TMUX_RESURRECT_VERSION  tmux-plugins/tmux-resurrect  tags
+TINYTEX_TAG             rstudio/tinytex-releases     keep
 '
 
 resolve_tool_versions() {

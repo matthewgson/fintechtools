@@ -23,15 +23,17 @@ ARG QUARTO_PANDOC_VERSION=3.10
 #                         error(), colliding with git's own error().
 #   one `make … install`  a separate flag-less `make install` makes git detect
 #                         "new build flags" and silently rebuild dynamic+PIE.
+#   c-ares-dev            Alpine 3.22 dropped c-ares-static; libcares.a (which
+#                         libcurl's static link still needs) moved into -dev.
 #   RUNTIME_PREFIX        git self-locates libexec relative to its real path, so
 #                         the bundle works wherever it's dropped at runtime.
-FROM alpine:3.20 AS gitstatic
-ARG GIT_STATIC_VERSION=2.43.0
+FROM alpine:3.22 AS gitstatic
+ARG GIT_STATIC_VERSION=2.43.7
 RUN apk add --no-cache \
   build-base wget tar xz ca-certificates pkgconf binutils \
   zlib-dev zlib-static openssl-dev openssl-libs-static \
   curl-dev curl-static expat-dev expat-static \
-  nghttp2-static brotli-static zstd-static c-ares-static \
+  nghttp2-static brotli-static zstd-static c-ares-dev \
   libidn2-static libunistring-static libpsl-static && \
   cd /tmp && \
   wget -q -O git.tar.xz "https://www.kernel.org/pub/software/scm/git/git-${GIT_STATIC_VERSION}.tar.xz" && \
@@ -69,6 +71,13 @@ RUN apk add --no-cache \
 # the image. Rust comes from herdr's own rust-toolchain.toml, and Zig (which
 # builds the vendored libghostty-vt) from the version its build.zig.zon asks
 # for, so a herdr bump needs no edit here.
+#
+# Codeberg is the one dependency host that goes down: libghostty-vt's lazy
+# translate-c dep lives there, and a 504 + hours of timeouts failed the
+# 2026-11-20 build. Each codeberg URL in build.zig.zon is probed first; a dead
+# one is pointed at a GitHub mirror of the same commit. That is safe because Zig
+# checks every package against the .hash in build.zig.zon, so a mirror can only
+# fail the build, never change what is built. A healthy Codeberg is untouched.
 FROM --platform=$BUILDPLATFORM ubuntu:24.04 AS herdrbuild
 ARG BUILDARCH
 ARG HERDR_VERSION=latest
@@ -85,6 +94,17 @@ RUN git clone -q --depth 1 --branch "${HERDR_VERSION}" https://github.com/herdrd
   case "$BUILDARCH" in arm64) zarch=aarch64 ;; amd64) zarch=x86_64 ;; \
   *) echo "ERROR: no Zig build for build arch $BUILDARCH" >&2; exit 1 ;; esac && \
   echo "Building herdr ${HERDR_VERSION} with Zig ${ZIG_VERSION} on ${zarch}" && \
+  zon=vendor/libghostty-vt/build.zig.zon && \
+  for u in $(sed -n 's#.*\.url = "\(https://codeberg\.org/[^"]*\)".*#\1#p' "$zon"); do \
+  ok=; for i in 1 2 3; do \
+  curl -fsSL --max-time 60 -o /dev/null "$u" && { ok=1; break; }; sleep 20; done; \
+  [ -n "$ok" ] && continue; \
+  case "$u" in */translate-c/archive/*) \
+  m="https://github.com/moderatelyConfused/translate-c/archive/${u##*/}" ;; \
+  *) echo "ERROR: $u is unreachable and has no known mirror" >&2; exit 1 ;; esac; \
+  echo "Codeberg unreachable, fetching $u from $m (Zig still checks .hash)"; \
+  sed -i "s#$u#$m#" "$zon"; \
+  done && \
   mkdir -p /opt/zig && \
   curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-${zarch}-linux-${ZIG_VERSION}.tar.xz" \
   | tar -xJ -C /opt/zig --strip-components=1 && \
@@ -142,12 +162,15 @@ FROM ubuntu:24.04
 
 LABEL maintainer="Matthew Son"
 LABEL description="HPC container: Neovim + Python 3.13 + uv + R 4.x + Claude Code + GitHub Copilot + OpenAI Codex CLIs + TinyTeX + farleaf + herdr"
-LABEL version="0.9.2"
+LABEL version="0.9.3"
 
 # ─── Version pins — bump here to upgrade any tool ────────────────────────────
 ARG UV_VERSION=latest
 ARG QUARTO_VERSION=latest
-ARG TINYTEX_TAG=v2026.06
+# TinyTeX's asset name carries the tag, so it cannot be `latest` here.
+# build_container.sh resolves the newest monthly release (TOOL_VERSIONS) and
+# passes it in; this default only serves a direct `podman build`.
+ARG TINYTEX_TAG=v2026.11
 # Neovim, Claude Code, GitHub Copilot, and OpenAI Codex track the LATEST release on every build
 # (see Stage 6 and Stage 11). build_container.sh resolves `latest` to the concrete version before
 # calling podman and passes it back in as a --build-arg — that is what makes the
